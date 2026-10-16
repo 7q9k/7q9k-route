@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -1739,7 +1739,7 @@ def dashboard_state(*, local: bool) -> dict[str, Any]:
         "ok": True,
         "version": APP_VERSION,
         "local": local,
-        "api_key": (api_key_cache() or "(Neustart nötig)") if local else None,
+        "api_key": (api_key_cache() or "(restart required)") if local else None,
         "models": [
             {"id": m, "api": "responses" if uses_responses_api(m) else "chat"}
             for m in models
@@ -1848,22 +1848,22 @@ def _print_banner(port: int, host: str, key: str, models: list[str]) -> None:
     _emit(
         _paint("oc-free-api", "bright")
         + "   "
-        + _paint(f"v{APP_VERSION} · OpenCode free models · OpenAI-kompatibel", "dim")
+        + _paint(f"v{APP_VERSION} · OpenCode free models · OpenAI-compatible", "dim")
     )
     _emit("  " + _paint("Dashboard ", "cyan") + _paint(f"http://localhost:{port}/", "green"))
     if host in ("0.0.0.0", "::"):
         _emit(
-            "  " + _paint("Netzwerk  ", "cyan")
+            "  " + _paint("Network   ", "cyan")
             + _paint(f"http://{_lan_ip()}:{port}/", "green")
-            + _paint("  (LAN-Zugriff nur mit API-Key)", "dim")
+            + _paint("  (LAN access requires the API key)", "dim")
         )
     _emit("  " + _paint("Base URL  ", "cyan") + _paint(f"http://localhost:{port}/v1", "bright"))
     _emit("  " + _paint("API-Key   ", "cyan") + _paint(key, "yellow"))
     _emit(
-        "  " + _paint("Modelle   ", "cyan")
-        + _paint(f"{len(models)} verfügbar: {shown_models}", "bright")
+        "  " + _paint("Models    ", "cyan")
+        + _paint(f"{len(models)} available: {shown_models}", "bright")
     )
-    _emit("  " + _paint("Beenden   ", "cyan") + _paint("Ctrl+C oder Fenster schließen", "dim"))
+    _emit("  " + _paint("Stop      ", "cyan") + _paint("Ctrl+C or close this window", "dim"))
     _emit("")
 
 
@@ -2038,7 +2038,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             "path": self._path,
             "status": status,
             "ms": round((time.time() - self._t0) * 1000),
-            "client": "lokal" if self._is_loopback() else self.client_address[0],
+            "client": "local" if self._is_loopback() else self.client_address[0],
         }
         model = self._meta.get("model")
         if model:
@@ -2073,7 +2073,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             tokens = entry["tokens_in"] + entry["tokens_out"]
             if tokens:
                 line += _paint(f" {tokens} tok", "dim")
-        if entry["client"] != "lokal":
+        if entry["client"] != "local":
             line += _paint(f"  [{entry['client']}]", "magenta")
         if entry.get("error"):
             line += "  " + _paint(entry["error"][:120], "red")
@@ -2668,10 +2668,10 @@ def main() -> None:
     _console_init(args.port)
     _print_banner(args.port, args.host, api_key, models)
     if restored:
-        tokens = f"{METRICS.tokens_in + METRICS.tokens_out:,}".replace(",", ".")
+        tokens = f"{METRICS.tokens_in + METRICS.tokens_out:,}"
         _emit(
-            "  " + _paint("Statistik ", "cyan")
-            + _paint(f"aus {STATS_FILE.name} geladen: {METRICS.requests} Anfragen, {tokens} Tokens", "dim")
+            "  " + _paint("Stats     ", "cyan")
+            + _paint(f"loaded from {STATS_FILE.name}: {METRICS.requests} requests, {tokens} tokens", "dim")
         )
         _emit("")
     if METRICS.path is not None:

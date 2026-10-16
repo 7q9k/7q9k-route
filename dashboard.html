@@ -1,5 +1,5 @@
 ﻿<!doctype html>
-<html lang="de" data-theme="dark">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -187,43 +187,43 @@
   <div class="brand">oc-free-api<span>.</span></div>
   <div class="top-right">
     <span class="uptime num" id="uptime"></span>
-    <span class="state" id="state"><b>Verbinde</b></span>
-    <button class="text-btn" id="theme" aria-label="Hell oder dunkel">Hell</button>
+    <span class="state" id="state"><b>Connecting</b></span>
+    <button class="text-btn" id="theme" aria-label="Light or dark">Light</button>
   </div>
 </header>
 
 <main class="col">
   <section class="gate" id="gate" hidden>
-    <h1 class="title">API-Key eingeben</h1>
-    <p class="lead">Du greifst über das Netzwerk zu. Der Key steht in <span class="mono">api-key.txt</span> auf dem Server-Rechner.</p>
+    <h1 class="title">Enter API key</h1>
+    <p class="lead">You are connecting over the network. The key is in <span class="mono">api-key.txt</span> on the server machine.</p>
     <form id="gateForm" class="field">
-      <input id="gateKey" placeholder="sk-oc-free-…" autocomplete="off" spellcheck="false" aria-label="API-Key">
-      <button class="btn primary" type="submit">Verbinden</button>
+      <input id="gateKey" placeholder="sk-oc-free-…" autocomplete="off" spellcheck="false" aria-label="API key">
+      <button class="btn primary" type="submit">Connect</button>
     </form>
     <p class="hint" id="gateHint" aria-live="polite"></p>
   </section>
 
   <div id="app" hidden>
-    <h1 class="title">Übersicht</h1>
-    <p class="lead">OpenCode-Gratis-Modelle über eine OpenAI- und Ollama-kompatible Schnittstelle.</p>
+    <h1 class="title">Overview</h1>
+    <p class="lead">OpenCode's free models behind an OpenAI- and Ollama-compatible API.</p>
 
     <div class="stats">
-      <div class="stat"><div class="l">Anfragen</div><div class="v" id="kReq">0</div><div class="h" id="kReqHint">&nbsp;</div></div>
+      <div class="stat"><div class="l">Requests</div><div class="v" id="kReq">0</div><div class="h" id="kReqHint">&nbsp;</div></div>
       <div class="stat"><div class="l">Tokens</div><div class="v" id="kTok">0</div><div class="h" id="kTokHint">&nbsp;</div></div>
-      <div class="stat"><div class="l">Wert bei OpenRouter</div><div class="v" id="kCost">–</div><div class="h" id="kCostHint">&nbsp;</div></div>
-      <div class="stat"><div class="l">Ø Antwortzeit</div><div class="v" id="kLat">–</div><div class="h" id="kLatHint">&nbsp;</div></div>
+      <div class="stat"><div class="l">OpenRouter value</div><div class="v" id="kCost">–</div><div class="h" id="kCostHint">&nbsp;</div></div>
+      <div class="stat"><div class="l">Avg. response time</div><div class="v" id="kLat">–</div><div class="h" id="kLatHint">&nbsp;</div></div>
     </div>
-    <div class="chart" id="chart" role="img" aria-label="Anfragen pro Minute in den letzten 30 Minuten"><div class="tip" id="tip"></div></div>
-    <div class="chart-cap"><span>Anfragen pro Minute · letzte 30 Minuten</span><span id="chartErr"></span></div>
+    <div class="chart" id="chart" role="img" aria-label="Requests per minute, last 30 minutes"><div class="tip" id="tip"></div></div>
+    <div class="chart-cap"><span>Requests per minute · last 30 minutes</span><span id="chartErr"></span></div>
 
     <section class="section">
       <div class="section-head">
-        <h2>Verbrauch und Kosten</h2>
-        <span class="tools"><span class="text-btn" id="saveState" style="cursor:default"></span><button class="text-btn" id="btnSave">Jetzt speichern</button><button class="text-btn" id="btnReset" hidden>Zurücksetzen</button></span>
+        <h2>Usage and cost</h2>
+        <span class="tools"><span class="text-btn" id="saveState" style="cursor:default"></span><button class="text-btn" id="btnSave">Save now</button><button class="text-btn" id="btnReset" hidden>Reset</button></span>
       </div>
       <div class="usage-scroll">
         <table class="usage">
-          <thead><tr><th>Modell</th><th class="r">Anfragen</th><th class="r">Eingabe</th><th class="r">Ausgabe</th><th class="r">Kosten</th></tr></thead>
+          <thead><tr><th>Model</th><th class="r">Requests</th><th class="r">Input</th><th class="r">Output</th><th class="r">Cost</th></tr></thead>
           <tbody id="usage"></tbody>
           <tfoot id="usageTotal"></tfoot>
         </table>
@@ -232,74 +232,74 @@
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>Gratis-Limit</h2><span class="tools"><span class="text-btn" id="limitState" style="cursor:default"></span></span></div>
+      <div class="section-head"><h2>Free limit</h2><span class="tools"><span class="text-btn" id="limitState" style="cursor:default"></span></span></div>
       <ul class="rows">
-        <li><span class="k">Letzte 5 Stunden</span><span class="v num" id="lim5">–</span><span class="a"></span></li>
-        <li><span class="k">Letzte 24 Stunden</span><span class="v num" id="lim24">–</span><span class="a"></span></li>
-        <li><span class="k">Limit erreicht</span><span class="v" id="limHit">–</span><span class="a"></span></li>
+        <li><span class="k">Last 5 hours</span><span class="v num" id="lim5">–</span><span class="a"></span></li>
+        <li><span class="k">Last 24 hours</span><span class="v num" id="lim24">–</span><span class="a"></span></li>
+        <li><span class="k">Limit hit</span><span class="v" id="limHit">–</span><span class="a"></span></li>
       </ul>
-      <p class="hint">OpenCode nennt kein festes Limit. Die Gratis-Modelle sind pro IP-Adresse begrenzt und nur zeitweise kostenlos. Nutzer berichten von etwa 200 Anfragen pro Tag. Ist das Limit erreicht, antwortet OpenCode mit HTTP 429 <span class="mono">FreeUsageLimitError</span>, dann hilft nur Warten.</p>
+      <p class="hint">OpenCode publishes no fixed number. Free models are limited per IP and only free for a limited time; users report about 200 requests per day. When the limit is hit, OpenCode answers HTTP 429 <span class="mono">FreeUsageLimitError</span> and you have to wait.</p>
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>Verbindung</h2></div>
+      <div class="section-head"><h2>Connection</h2></div>
       <ul class="rows">
-        <li><span class="k">OpenAI-Base-URL</span><span class="v" id="urlOpenai">–</span><span class="a"><button class="text-btn" data-copy="urlOpenai">Kopieren</button></span></li>
-        <li><span class="k">Ollama-URL</span><span class="v" id="urlOllama">–</span><span class="a"><button class="text-btn" data-copy="urlOllama">Kopieren</button></span></li>
-        <li id="rowLan" hidden><span class="k">Im Netzwerk</span><span class="v" id="urlLan">–</span><span class="a"><button class="text-btn" data-copy="urlLan">Kopieren</button></span></li>
-        <li><span class="k">API-Key</span><span class="v" id="apiKey">–</span><span class="a"><button class="text-btn" id="btnReveal">Zeigen</button><button class="text-btn" id="btnCopyKey">Kopieren</button></span></li>
+        <li><span class="k">OpenAI base URL</span><span class="v" id="urlOpenai">–</span><span class="a"><button class="text-btn" data-copy="urlOpenai">Copy</button></span></li>
+        <li><span class="k">Ollama URL</span><span class="v" id="urlOllama">–</span><span class="a"><button class="text-btn" data-copy="urlOllama">Copy</button></span></li>
+        <li id="rowLan" hidden><span class="k">On your network</span><span class="v" id="urlLan">–</span><span class="a"><button class="text-btn" data-copy="urlLan">Copy</button></span></li>
+        <li><span class="k">API key</span><span class="v" id="apiKey">–</span><span class="a"><button class="text-btn" id="btnReveal">Show</button><button class="text-btn" id="btnCopyKey">Copy</button></span></li>
       </ul>
       <p class="hint" id="accessNote"></p>
 
       <div class="code-head">
-        <div class="mode" role="radiogroup" aria-label="Beispiel" id="tabs">
+        <div class="mode" role="radiogroup" aria-label="Example" id="tabs">
           <button role="radio" data-tab="python" aria-checked="true">Python</button>
           <button role="radio" data-tab="curl" aria-checked="false">curl</button>
           <button role="radio" data-tab="opencode" aria-checked="false">OpenCode</button>
           <button role="radio" data-tab="ollama" aria-checked="false">Ollama</button>
         </div>
-        <button class="text-btn" id="btnSnip">Beispiel kopieren</button>
+        <button class="text-btn" id="btnSnip">Copy example</button>
       </div>
       <pre class="code" id="snip"></pre>
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>Ausprobieren</h2></div>
+      <div class="section-head"><h2>Try it</h2></div>
       <div class="compose">
-        <textarea id="pgPrompt" placeholder="Nachricht an das Modell" aria-label="Nachricht">Erkläre in zwei Sätzen, was ein Reverse-Proxy ist.</textarea>
+        <textarea id="pgPrompt" placeholder="Message to the model" aria-label="Message">Explain in two sentences what a reverse proxy is.</textarea>
         <div class="compose-bar">
-          <select class="select" id="pgModel" aria-label="Modell"></select>
-          <span class="actions"><button class="btn" id="pgStop" hidden>Abbrechen</button><button class="btn primary" id="pgSend">Senden</button></span>
+          <select class="select" id="pgModel" aria-label="Model"></select>
+          <span class="actions"><button class="btn" id="pgStop" hidden>Cancel</button><button class="btn primary" id="pgSend">Send</button></span>
         </div>
       </div>
-      <p class="hint">Strg + Enter sendet. Gratis-Modelle dürfen Eingaben zum Training nutzen, also keine Geheimnisse senden.</p>
+      <p class="hint">Ctrl + Enter sends. Free models may use your input for training, so do not send secrets.</p>
       <div class="answer" id="pgOut" hidden aria-live="polite"></div>
     </section>
 
     <section class="section">
       <div class="section-head">
-        <h2>Modelle <span class="num" id="modelCount"></span></h2>
-        <span class="tools"><span class="text-btn" id="modelSource" style="cursor:default"></span><button class="text-btn" id="btnRefresh">Liste aktualisieren</button><button class="text-btn" id="btnTestAll">Alle testen</button></span>
+        <h2>Models <span class="num" id="modelCount"></span></h2>
+        <span class="tools"><span class="text-btn" id="modelSource" style="cursor:default"></span><button class="text-btn" id="btnRefresh">Refresh list</button><button class="text-btn" id="btnTestAll">Test all</button></span>
       </div>
       <ul class="list" id="models"></ul>
     </section>
 
     <section class="section">
       <div class="section-head">
-        <h2>Aktivität</h2>
+        <h2>Activity</h2>
         <div class="mode" role="radiogroup" aria-label="Filter" id="logFilter">
-          <button role="radio" data-f="all" aria-checked="true">Alle</button>
-          <button role="radio" data-f="err" aria-checked="false">Fehler</button>
+          <button role="radio" data-f="all" aria-checked="true">All</button>
+          <button role="radio" data-f="err" aria-checked="false">Errors</button>
         </div>
       </div>
       <div class="scroll"><ul class="list log" id="log"></ul></div>
     </section>
 
     <footer class="foot">
-      <span>Nur für den persönlichen Gebrauch. Den Zugang nicht an andere weitergeben.</span>
+      <span>Personal use only. Do not share access with others.</span>
       <span class="actions" id="localActions" hidden>
-        <button class="btn" id="btnKey">Neuen Key erzeugen</button>
-        <button class="btn danger" id="btnStop">Server stoppen</button>
+        <button class="btn" id="btnKey">New API key</button>
+        <button class="btn danger" id="btnStop">Stop server</button>
       </span>
     </footer>
   </div>
@@ -308,21 +308,21 @@
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const fmt = n => n == null ? '–' : n >= 1e6 ? (n/1e6).toLocaleString('de-DE',{maximumFractionDigits:1})+' Mio.' : n >= 1e4 ? (n/1e3).toLocaleString('de-DE',{maximumFractionDigits:1})+' Tsd.' : n.toLocaleString('de-DE');
-const fmtInt = n => n == null ? '–' : Math.round(n).toLocaleString('de-DE');
+const fmt = n => n == null ? '–' : n.toLocaleString('en-US');
+const fmtInt = n => n == null ? '–' : Math.round(n).toLocaleString('en-US');
 const fmtUsd = v => {
   if (v == null) return '–';
-  if (v === 0) return '0,00 $';
+  if (v === 0) return '$0.00';
   const digits = v < 0.0001 ? 6 : v < 0.01 ? 5 : v < 1 ? 4 : 2;
-  return v.toLocaleString('de-DE', {minimumFractionDigits:2, maximumFractionDigits:digits}) + ' $';
+  return '$' + v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:digits});
 };
-const fmtPerM = v => v == null ? '–' : v.toLocaleString('de-DE', {minimumFractionDigits:2, maximumFractionDigits:4}) + ' $';
-const fmtClock = t => t ? new Date(t*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) : '';
-const fmtDate = t => t ? new Date(t*1000).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
-const fmtMs = ms => ms == null ? '–' : ms >= 1000 ? (ms/1000).toLocaleString('de-DE',{maximumFractionDigits:1})+' s' : ms+' ms';
-const fmtDur = s => { const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60); return d ? `${d} T ${h} Std.` : h ? `${h} Std. ${m} Min.` : m ? `${m} Min.` : `${s} Sek.`; };
+const fmtPerM = v => v == null ? '–' : '$' + v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:4});
+const fmtClock = t => t ? new Date(t*1000).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : '';
+const fmtDate = t => t ? new Date(t*1000).toLocaleString('en-US',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+const fmtMs = ms => ms == null ? '–' : ms >= 1000 ? (ms/1000).toLocaleString('en-US',{maximumFractionDigits:1})+' s' : ms+' ms';
+const fmtDur = s => { const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60); return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : m ? `${m}m` : `${s}s`; };
 
-function applyThemeLabel(){ $('theme').textContent = document.documentElement.dataset.theme === 'dark' ? 'Hell' : 'Dunkel'; }
+function applyThemeLabel(){ $('theme').textContent = document.documentElement.dataset.theme === 'dark' ? 'Light' : 'Dark'; }
 $('theme').onclick = () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; try{ localStorage.setItem('ocfree.theme', t) }catch{} applyThemeLabel(); };
 applyThemeLabel();
 
@@ -350,7 +350,7 @@ async function api(path, body){
   const opts = body === undefined ? {headers:authHeaders()} : {method:'POST', headers:authHeaders({'Content-Type':'application/json'}), body:JSON.stringify(body)};
   const r = await fetch(path, opts);
   let j = {}; try{ j = await r.json() }catch{}
-  if (r.status === 401) throw new AuthError(j.error?.message || 'API-Key fehlt');
+  if (r.status === 401) throw new AuthError(j.error?.message || 'API key missing');
   if (!r.ok || j.ok === false) throw new Error(j.error?.message || j.error || ('HTTP '+r.status));
   return j;
 }
@@ -360,7 +360,7 @@ let state=null, stats=null, revealed=false, tab='python', logFilter='all';
 
 function setState(ok){
   const s=$('state'); s.classList.toggle('down', !ok);
-  s.innerHTML = ok ? `<b>Läuft</b>${state && !state.local ? ' · über Netzwerk' : ''}` : '<b>Nicht erreichbar</b>';
+  s.innerHTML = ok ? `<b>Running</b>${state && !state.local ? ' · via network' : ''}` : '<b>Unreachable</b>';
 }
 const keyText = () => state?.local ? state.api_key : remoteKey;
 
@@ -372,24 +372,24 @@ function renderAccess(){
   $('rowLan').hidden = !lan; if (lan) $('urlLan').textContent = lan;
   const k = keyText() || '';
   $('apiKey').textContent = revealed ? k : (k ? k.slice(0,11)+'•'.repeat(16)+k.slice(-4) : '–');
-  $('btnReveal').textContent = revealed ? 'Verbergen' : 'Zeigen';
+  $('btnReveal').textContent = revealed ? 'Hide' : 'Show';
   $('localActions').hidden = !state.local;
   $('accessNote').textContent = !state.local
-    ? 'Du bist über das Netzwerk verbunden. Jede Anfrage braucht den API-Key.'
-    : state.lan_ip ? 'Auf diesem Rechner geht es ohne Key. Andere Geräte im Netzwerk brauchen ihn.'
-    : 'Der Server ist nur auf diesem Rechner erreichbar.';
+    ? 'Connected over the network. Every request needs the API key.'
+    : state.lan_ip ? 'No key needed on this machine. Other devices on the network need it.'
+    : 'The server is only reachable from this machine.';
   renderSnippet();
 }
 
 function renderSnippet(){
   if (!state) return;
   const base=location.origin, k=keyText()||'', m=state.default_model;
-  const shown = revealed && k ? k : '<API-Key aus api-key.txt>';
+  const shown = revealed && k ? k : '<API key from api-key.txt>';
   const s = {
-    python:`from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${base}/v1",\n    api_key="${shown}",\n)\nresp = client.chat.completions.create(\n    model="${m}",\n    messages=[{"role": "user", "content": "Hallo"}],\n)\nprint(resp.choices[0].message.content)`,
-    curl:`curl ${base}/v1/chat/completions \\\n  -H "Authorization: Bearer ${shown}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${m}","messages":[{"role":"user","content":"Hallo"}]}'`,
-    opencode:`{\n  "$schema": "https://opencode.ai/config.json",\n  "provider": {\n    "oc-free": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "OpenCode Free (lokaler Proxy)",\n      "options": {\n        "baseURL": "${base}/v1",\n        "apiKey": "${shown}"\n      },\n      "models": { "${m}": { "name": "${m}" } }\n    }\n  }\n}`,
-    ollama:`# Ollama-Clients (Open WebUI, Continue …): Basis-URL ohne /v1\nOLLAMA_HOST=${base}\n\ncurl ${base}/api/chat -d '{\n  "model": "${m}",\n  "messages": [{"role": "user", "content": "Hallo"}]\n}'`,
+    python:`from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${base}/v1",\n    api_key="${shown}",\n)\nresp = client.chat.completions.create(\n    model="${m}",\n    messages=[{"role": "user", "content": "Hello"}],\n)\nprint(resp.choices[0].message.content)`,
+    curl:`curl ${base}/v1/chat/completions \\\n  -H "Authorization: Bearer ${shown}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${m}","messages":[{"role":"user","content":"Hello"}]}'`,
+    opencode:`{\n  "$schema": "https://opencode.ai/config.json",\n  "provider": {\n    "oc-free": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "OpenCode Free (local proxy)",\n      "options": {\n        "baseURL": "${base}/v1",\n        "apiKey": "${shown}"\n      },\n      "models": { "${m}": { "name": "${m}" } }\n    }\n  }\n}`,
+    ollama:`# Ollama clients (Open WebUI, Continue …): base URL without /v1\nOLLAMA_HOST=${base}\n\ncurl ${base}/api/chat -d '{\n  "model": "${m}",\n  "messages": [{"role": "user", "content": "Hello"}]\n}'`,
   };
   $('snip').textContent = s[tab];
   $('snip').dataset.copy = k ? s[tab].replaceAll(shown, k) : s[tab];
@@ -399,34 +399,34 @@ function renderModels(){
   if (!state) return;
   const ul=$('models'), per=stats?.models||{}, ids=state.models.map(m=>m.id);
   if ([...ul.children].map(li=>li.dataset.m).join() !== ids.join()){
-    ul.innerHTML = state.models.map(m=>`<li data-m="${esc(m.id)}"><div style="min-width:0"><div class="l-title">${esc(m.id)}</div><div class="l-sub" data-f="sub"></div></div><div class="l-act"><span class="res" data-f="res"></span><button class="text-btn" data-test>Testen</button></div></li>`).join('');
+    ul.innerHTML = state.models.map(m=>`<li data-m="${esc(m.id)}"><div style="min-width:0"><div class="l-title">${esc(m.id)}</div><div class="l-sub" data-f="sub"></div></div><div class="l-act"><span class="res" data-f="res"></span><button class="text-btn" data-test>Test</button></div></li>`).join('');
     ul.querySelectorAll('[data-test]').forEach(b=>b.onclick=()=>testModel(b.closest('li')));
     const sel=$('pgModel'), cur=sel.value||state.default_model;
     sel.innerHTML = ids.map(id=>`<option>${esc(id)}</option>`).join('');
     sel.value = ids.includes(cur) ? cur : ids[0];
   }
   for (const li of ul.children){
-    const api = state.models.find(m=>m.id===li.dataset.m)?.api === 'responses' ? 'Responses-API' : 'Chat-API';
+    const api = state.models.find(m=>m.id===li.dataset.m)?.api === 'responses' ? 'Responses API' : 'Chat API';
     const s = per[li.dataset.m];
     li.querySelector('[data-f=sub]').innerHTML = `<span>${api}</span>` + (s
-      ? `<span>${fmtInt(s.requests)} Anfragen</span>${s.errors?`<span class="bad">${fmtInt(s.errors)} Fehler</span>`:''}<span>Ø ${fmtMs(s.avg_ms)}</span>`
-      : '<span>noch nicht genutzt</span>');
+      ? `<span>${fmtInt(s.requests)} requests</span>${s.errors?`<span class="bad">${fmtInt(s.errors)} errors</span>`:''}<span>avg ${fmtMs(s.avg_ms)}</span>`
+      : '<span>not used yet</span>');
   }
   $('modelCount').textContent = '· '+ids.length;
   const src = state.model_list||{};
-  const label = {live:'Live abgefragt', cache:'Aus dem Cache', fallback:'Standardliste'}[src.source]||'';
-  $('modelSource').textContent = label + (src.updated ? ' '+new Date(src.updated*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) : '');
+  const label = {live:'Fetched live', cache:'From cache', fallback:'Default list'}[src.source]||'';
+  $('modelSource').textContent = label + (src.updated ? ' '+new Date(src.updated*1000).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : '');
 }
 
 async function testModel(li){
   const btn=li.querySelector('[data-test]'), res=li.querySelector('[data-f=res]');
-  btn.disabled=true; res.className='res'; res.textContent='Wird getestet';
+  btn.disabled=true; res.className='res'; res.textContent='Testing';
   try{
     const r = await api('/api/dashboard/test', {model: li.dataset.m});
-    res.classList.add('ok'); res.textContent = `Antwortet · ${fmtMs(r.latency_ms)}`; res.title = r.text;
+    res.classList.add('ok'); res.textContent = `OK · ${fmtMs(r.latency_ms)}`; res.title = r.text;
   }catch(e){
     if (e instanceof AuthError) return showGate(e.message);
-    res.classList.add('bad'); res.textContent = 'Fehler'; res.title = e.message;
+    res.classList.add('bad'); res.textContent = 'Error'; res.title = e.message;
   }finally{ btn.disabled=false; refreshStats(); }
 }
 
@@ -435,18 +435,18 @@ function renderStats(){
   $('kReq').textContent = fmtInt(s.requests);
   const rate = s.requests ? s.errors/s.requests*100 : 0;
   $('kReqHint').innerHTML = s.errors
-    ? `<span style="color:var(--bad)">${fmtInt(s.errors)} Fehler · ${rate.toLocaleString('de-DE',{maximumFractionDigits:1})} %</span>`
-    : 'keine Fehler';
+    ? `<span style="color:var(--bad)">${fmtInt(s.errors)} errors · ${rate.toLocaleString('en-US',{maximumFractionDigits:1})} %</span>`
+    : 'no errors';
   $('kTok').textContent = fmtInt(s.tokens_in + s.tokens_out);
-  $('kTokHint').textContent = `${fmtInt(s.tokens_in)} Eingabe · ${fmtInt(s.tokens_out)} Ausgabe`;
+  $('kTokHint').textContent = `${fmtInt(s.tokens_in)} input · ${fmtInt(s.tokens_out)} output`;
   $('kCost').textContent = fmtUsd(s.usage?.total_cost_usd ?? 0);
-  $('kCostHint').textContent = s.usage?.unpriced_tokens ? `ohne ${fmtInt(s.usage.unpriced_tokens)} Tokens ohne Preis` : 'du zahlst 0 $';
+  $('kCostHint').textContent = s.usage?.unpriced_tokens ? `excl. ${fmtInt(s.usage.unpriced_tokens)} unpriced tokens` : 'you pay $0';
   $('kLat').textContent = fmtMs(s.avg_ms);
   const last=[...s.log].reverse().find(e=>e.model);
-  $('kLatHint').textContent = last ? `zuletzt ${fmtMs(last.ms)}` : 'noch keine Anfrage';
-  $('uptime').textContent = 'seit '+fmtDur(s.uptime_s);
+  $('kLatHint').textContent = last ? `last ${fmtMs(last.ms)}` : 'no requests yet';
+  $('uptime').textContent = 'up '+fmtDur(s.uptime_s);
   const errs = s.timeline.reduce((a,b)=>a+b.errors,0);
-  $('chartErr').innerHTML = errs ? `<span style="color:var(--bad)">${errs} Fehler</span>` : '';
+  $('chartErr').innerHTML = errs ? `<span style="color:var(--bad)">${errs} errors</span>` : '';
   renderChart(); renderModels(); renderLog(); renderUsage(); renderLimits(); renderSave();
 }
 
@@ -456,31 +456,31 @@ function renderUsage(){
   $('usage').innerHTML = rows.map(r=>{
     const p=r.price;
     const priceLine = p
-      ? `${esc(p.openrouter_id)} · ${fmtPerM(p.prompt_per_m)} Eingabe / ${fmtPerM(p.completion_per_m)} Ausgabe pro 1 Mio. Tokens`
-      : 'kein passendes Modell bei OpenRouter, daher kein Preis';
-    const cached = r.tokens_cached ? ` <span class="p">(${fmtInt(r.tokens_cached)} Cache)</span>` : '';
-    return `<tr class="${r.requests?'':'idle'}"><td><div class="m">${esc(r.model)}</div><div class="p">${priceLine}</div></td><td class="r" data-l="Anfragen">${fmtInt(r.requests)}</td><td class="r" data-l="Eingabe">${fmtInt(r.tokens_in)}${cached}</td><td class="r" data-l="Ausgabe">${fmtInt(r.tokens_out)}</td><td class="r" data-l="Kosten">${r.cost_usd==null?'–':fmtUsd(r.cost_usd)}</td></tr>`;
+      ? `${esc(p.openrouter_id)} · ${fmtPerM(p.prompt_per_m)} input / ${fmtPerM(p.completion_per_m)} output per 1M tokens`
+      : 'no matching model on OpenRouter, so no price';
+    const cached = r.tokens_cached ? ` <span class="p">(${fmtInt(r.tokens_cached)} cached)</span>` : '';
+    return `<tr class="${r.requests?'':'idle'}"><td><div class="m">${esc(r.model)}</div><div class="p">${priceLine}</div></td><td class="r" data-l="Requests">${fmtInt(r.requests)}</td><td class="r" data-l="Input">${fmtInt(r.tokens_in)}${cached}</td><td class="r" data-l="Output">${fmtInt(r.tokens_out)}</td><td class="r" data-l="Cost">${r.cost_usd==null?'–':fmtUsd(r.cost_usd)}</td></tr>`;
   }).join('');
   const sum=k=>u.rows.reduce((a,r)=>a+r[k],0);
-  $('usageTotal').innerHTML = `<tr><td>Gesamt</td><td class="r" data-l="Anfragen">${fmtInt(sum('requests'))}</td><td class="r" data-l="Eingabe">${fmtInt(sum('tokens_in'))}</td><td class="r" data-l="Ausgabe">${fmtInt(sum('tokens_out'))}</td><td class="r" data-l="Kosten">${fmtUsd(u.total_cost_usd)}</td></tr>`;
+  $('usageTotal').innerHTML = `<tr><td>Total</td><td class="r" data-l="Requests">${fmtInt(sum('requests'))}</td><td class="r" data-l="Input">${fmtInt(sum('tokens_in'))}</td><td class="r" data-l="Output">${fmtInt(sum('tokens_out'))}</td><td class="r" data-l="Cost">${fmtUsd(u.total_cost_usd)}</td></tr>`;
   const pi=u.pricing||{};
   $('priceNote').textContent = (pi.fetched
-    ? `Preise live von OpenRouter (${fmtInt(pi.models)} Modelle, Stand ${fmtDate(pi.fetched)}). `
-    : 'OpenRouter-Preise werden geladen. ')
-    + 'So viel hätten dieselben Tokens bei OpenRouter gekostet. Bei OpenCode zahlst du nichts.'
-    + (pi.error ? ` Letzte Abfrage fehlgeschlagen: ${pi.error}` : '');
+    ? `Live prices from OpenRouter (${fmtInt(pi.models)} models, ${fmtDate(pi.fetched)}). `
+    : 'Loading OpenRouter prices. ')
+    + 'This is what the same tokens would have cost on OpenRouter. OpenCode charges nothing.'
+    + (pi.error ? ` Last fetch failed: ${pi.error}` : '');
 }
 
 function renderLimits(){
   const l=stats?.limits; if(!l) return;
-  $('lim5').textContent = `${fmtInt(l.requests_5h)} Anfragen`;
-  $('lim24').textContent = `${fmtInt(l.requests_24h)} Anfragen`;
+  $('lim5').textContent = `${fmtInt(l.requests_5h)} requests`;
+  $('lim24').textContent = `${fmtInt(l.requests_24h)} requests`;
   const recent = l.last_limit_hit && Date.now()/1000 - l.last_limit_hit < 86400;
   $('limHit').innerHTML = l.last_limit_hit
-    ? `<span style="color:${recent?'var(--bad)':'inherit'}">${fmtDate(l.last_limit_hit)}</span>${l.limit_hits_24h>1?` · ${l.limit_hits_24h}× in 24 Std.`:''}`
-    : 'noch nie';
+    ? `<span style="color:${recent?'var(--bad)':'inherit'}">${fmtDate(l.last_limit_hit)}</span>${l.limit_hits_24h>1?` · ${l.limit_hits_24h}× in 24 h`:''}`
+    : 'never';
   const st=$('limitState');
-  st.innerHTML = recent ? '<span style="color:var(--bad)">Limit kürzlich erreicht</span>' : 'kein Limit erreicht';
+  st.innerHTML = recent ? '<span style="color:var(--bad)">Limit hit recently</span>' : 'limit not hit';
 }
 
 function renderSave(){
@@ -488,8 +488,8 @@ function renderSave(){
   $('btnSave').hidden = !s.persistent;
   $('btnReset').hidden = !state?.local;
   $('saveState').textContent = !s.persistent
-    ? 'Speichern ist aus (--no-save)'
-    : (s.saved_at ? `Gespeichert ${fmtClock(s.saved_at)}` : 'Noch nicht gespeichert') + (s.since ? ` · Daten seit ${new Date(s.since*1000).toLocaleDateString('de-DE')}` : '');
+    ? 'Saving is off (--no-save)'
+    : (s.saved_at ? `Saved ${fmtClock(s.saved_at)}` : 'Not saved yet') + (s.since ? ` · since ${new Date(s.since*1000).toLocaleDateString('en-US')}` : '');
 }
 
 function renderChart(){
@@ -507,14 +507,14 @@ function renderChart(){
     if (d.errors) svg += `<rect class="e" x="${x}" y="${y(d.errors)}" width="${bw}" height="${ih*(d.errors/top)}" rx="${rx}"/>`;
     svg += '</g>';
   });
-  svg += `<text class="axis" x="${padL}" y="${H-2}">vor 30 Min.</text><text class="axis" x="${W}" y="${H-2}" text-anchor="end">jetzt</text></svg>`;
+  svg += `<text class="axis" x="${padL}" y="${H-2}">30 min ago</text><text class="axis" x="${W}" y="${H-2}" text-anchor="end">now</text></svg>`;
   el.querySelectorAll('svg,.empty-note').forEach(x=>x.remove());
   el.insertAdjacentHTML('beforeend', svg);
-  if (!data.some(d=>d.requests)) el.insertAdjacentHTML('beforeend','<div class="empty-note">Noch keine Anfragen in den letzten 30 Minuten</div>');
+  if (!data.some(d=>d.requests)) el.insertAdjacentHTML('beforeend','<div class="empty-note">No requests in the last 30 minutes</div>');
   const tip=$('tip');
   el.querySelectorAll('g.col').forEach(g=>{
     g.onmouseenter=()=>{ const i=+g.dataset.i, d=data[i], ago=n-1-i;
-      tip.textContent = `${d.requests} Anfragen${d.errors?`, ${d.errors} Fehler`:''} · ${ago?`vor ${ago} Min.`:'diese Minute'}`;
+      tip.textContent = `${d.requests} requests${d.errors?`, ${d.errors} errors`:''} · ${ago?`${ago} min ago`:'this minute'}`;
       tip.style.left=(padL+(i+.5)*slot)+'px'; tip.style.top=y(d.requests)+'px'; tip.style.opacity=1; };
     g.onmouseleave=()=>tip.style.opacity=0;
   });
@@ -525,24 +525,24 @@ function renderLog(){
   $('log').innerHTML = rows.length ? rows.map(e=>{
     const bad = e.status>=400 || e.error;
     const tok=(e.tokens_in||0)+(e.tokens_out||0);
-    const sub=[e.model, tok?`${fmtInt(e.tokens_in||0)} ein · ${fmtInt(e.tokens_out||0)} aus`:'', tok&&e.cost_usd!=null?fmtUsd(e.cost_usd):'', e.client!=='lokal'?e.client:''].filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join('');
+    const sub=[e.model, tok?`${fmtInt(e.tokens_in||0)} in · ${fmtInt(e.tokens_out||0)} out`:'', tok&&e.cost_usd!=null?fmtUsd(e.cost_usd):'', e.client!=='local'?e.client:''].filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join('');
     return `<li><span class="t">${esc(e.t)}</span><div style="min-width:0"><div class="l-title">${esc(e.method)} ${esc(e.path)}</div>${sub||e.error?`<div class="l-sub">${sub}${e.error?`<span class="errline" title="${esc(e.error)}">${esc(e.error.slice(0,140))}</span>`:''}</div>`:''}</div><span class="code ${bad?'bad':''}">${e.status||'—'} · ${fmtMs(e.ms)}</span></li>`;
-  }).join('') : `<li class="empty-row" style="display:block">${logFilter==='err'?'Keine Fehler.':'Noch keine Anfragen. Schick oben eine Nachricht oder teste ein Modell.'}</li>`;
+  }).join('') : `<li class="empty-row" style="display:block">${logFilter==='err'?'No errors.':'No requests yet. Send a message above or test a model.'}</li>`;
 }
 
 async function loadState(){
   try{ state = await api('/api/dashboard'); $('gate').hidden=true; $('app').hidden=false; setState(true); renderAccess(); renderModels(); }
-  catch(e){ if (e instanceof AuthError) showGate(remoteKey ? 'Der Key wurde nicht angenommen. Bitte prüfen.' : ''); else setState(false); }
+  catch(e){ if (e instanceof AuthError) showGate(remoteKey ? 'The key was not accepted. Please check it.' : ''); else setState(false); }
 }
 async function refreshStats(){
   if (!state) return;
   try{ stats = await api('/api/dashboard/stats'); setState(true); renderStats(); }
-  catch(e){ if (e instanceof AuthError) showGate('Der Key ist nicht mehr gültig. Bitte den neuen eingeben.'); else setState(false); }
+  catch(e){ if (e instanceof AuthError) showGate('The key is no longer valid. Please enter the new one.'); else setState(false); }
 }
-function showGate(msg){ state=null; $('app').hidden=true; $('gate').hidden=false; $('state').innerHTML='<b>Key nötig</b>'; const h=$('gateHint'); h.textContent=msg||''; h.classList.toggle('bad', !!msg); $('gateKey').value=remoteKey; $('gateKey').focus(); }
+function showGate(msg){ state=null; $('app').hidden=true; $('gate').hidden=false; $('state').innerHTML='<b>Key required</b>'; const h=$('gateHint'); h.textContent=msg||''; h.classList.toggle('bad', !!msg); $('gateKey').value=remoteKey; $('gateKey').focus(); }
 $('gateForm').onsubmit = async ev => { ev.preventDefault(); remoteKey=$('gateKey').value.trim(); store.set(remoteKey); await loadState(); refreshStats(); };
 
-async function copy(text){ try{ await navigator.clipboard.writeText(text.trim()); toast('Kopiert'); }catch{ toast('Kopieren ging nicht. Bitte von Hand markieren.'); } }
+async function copy(text){ try{ await navigator.clipboard.writeText(text.trim()); toast('Copied'); }catch{ toast('Copy failed. Please select it manually.'); } }
 document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copy($(b.dataset.copy).textContent));
 $('btnCopyKey').onclick=()=>copy(keyText()||'');
 $('btnSnip').onclick=()=>copy($('snip').dataset.copy||$('snip').textContent);
@@ -551,19 +551,19 @@ function radio(group, onPick){ group.onclick=e=>{ const b=e.target.closest('[rol
 radio($('tabs'), b=>{ tab=b.dataset.tab; renderSnippet(); });
 radio($('logFilter'), b=>{ logFilter=b.dataset.f; renderLog(); });
 
-$('btnRefresh').onclick=e=>busy(e.currentTarget, async()=>{ const r=await api('/api/dashboard/refresh',{}); await loadState(); toast(r.source==='live'?`${r.models.length} Modelle live abgefragt`:'Abfrage fehlgeschlagen. Die bisherige Liste bleibt.'); });
+$('btnRefresh').onclick=e=>busy(e.currentTarget, async()=>{ const r=await api('/api/dashboard/refresh',{}); await loadState(); toast(r.source==='live'?`${r.models.length} models fetched`:'Fetch failed. Keeping the current list.'); });
 $('btnTestAll').onclick=e=>busy(e.currentTarget, async()=>{ for (const li of $('models').children) await testModel(li); });
-armed($('btnKey'), 'Wirklich neu erzeugen?', async()=>{ await api('/api/dashboard/key',{}); await loadState(); toast('Neuer Key ist aktiv. Clients brauchen ihn jetzt.'); });
-$('btnSave').onclick=e=>busy(e.currentTarget, async()=>{ const r=await api('/api/dashboard/save',{}); toast(`Gespeichert in ${r.file.split(/[\\/]/).pop()}`); refreshStats(); });
-armed($('btnReset'), 'Wirklich alles löschen?', async()=>{ await api('/api/dashboard/reset',{}); toast('Statistik zurückgesetzt'); refreshStats(); });
-armed($('btnStop'), 'Wirklich stoppen?', async()=>{ await api('/api/dashboard/stop',{}); toast('Server wird gestoppt'); setTimeout(()=>setState(false),600); });
+armed($('btnKey'), 'Really replace it?', async()=>{ await api('/api/dashboard/key',{}); await loadState(); toast('New key active. Clients need it now.'); });
+$('btnSave').onclick=e=>busy(e.currentTarget, async()=>{ const r=await api('/api/dashboard/save',{}); toast(`Saved to ${r.file.split(/[\\/]/).pop()}`); refreshStats(); });
+armed($('btnReset'), 'Really delete all?', async()=>{ await api('/api/dashboard/reset',{}); toast('Stats reset'); refreshStats(); });
+armed($('btnStop'), 'Really stop?', async()=>{ await api('/api/dashboard/stop',{}); toast('Stopping server'); setTimeout(()=>setState(false),600); });
 
 let pgAbort=null;
 async function sendPrompt(){
   const prompt=$('pgPrompt').value.trim(); if(!prompt || pgAbort) return;
   const model=$('pgModel').value, out=$('pgOut'), t0=performance.now();
   out.hidden=false;
-  out.innerHTML=`<div class="meta">${esc(model)} · Wird gesendet</div><div class="bar"><i></i></div><div class="think" hidden></div><div class="text"></div>`;
+  out.innerHTML=`<div class="meta">${esc(model)} · Sending</div><div class="bar"><i></i></div><div class="think" hidden></div><div class="text"></div>`;
   const meta=out.querySelector('.meta'), bar=out.querySelector('.bar'), think=out.querySelector('.think'), text=out.querySelector('.text');
   pgAbort=new AbortController(); $('pgSend').disabled=true; $('pgStop').hidden=false;
   let first=null, usage=null;
@@ -580,22 +580,22 @@ async function sendPrompt(){
         if(!ev.startsWith('data:')) continue;
         const data=ev.slice(5).trim(); if(data==='[DONE]') continue;
         const j=JSON.parse(data);
-        if(j.error) throw new Error(j.error.message||'Fehler vom Anbieter');
+        if(j.error) throw new Error(j.error.message||'Upstream error');
         if(j.usage) usage=j.usage;
         for(const c of j.choices||[]){
           const d=c.delta||{};
           if(d.reasoning_content){ think.hidden=false; think.textContent+=d.reasoning_content; think.scrollTop=1e9; }
           if(d.content){ if(first==null) first=performance.now()-t0; text.textContent+=d.content; }
         }
-        meta.textContent = `${model} · ${first!=null ? 'Schreibt' : 'Denkt nach'}`;
+        meta.textContent = `${model} · ${first!=null ? 'Writing' : 'Thinking'}`;
       }
     }
     const total=Math.round(performance.now()-t0);
-    meta.textContent = `${model} · ${fmtMs(total)}` + (first!=null?` · erstes Wort nach ${fmtMs(Math.round(first))}`:'') + (usage?` · ${fmt(usage.total_tokens)} Tokens`:'');
-    if(!text.textContent && !think.textContent) text.textContent = 'Das Modell hat nichts geantwortet. Bitte ein anderes Modell versuchen.';
+    meta.textContent = `${model} · ${fmtMs(total)}` + (first!=null?` · first token after ${fmtMs(Math.round(first))}`:'') + (usage?` · ${fmt(usage.total_tokens)} Tokens`:'');
+    if(!text.textContent && !think.textContent) text.textContent = 'The model returned nothing. Try another model.';
   }catch(e){
-    if(e.name==='AbortError') meta.textContent=`${model} · Abgebrochen`;
-    else { meta.textContent=`${model} · Fehlgeschlagen`; const er=document.createElement('div'); er.className='err'; er.textContent=e.message+(/429/.test(e.message)?' Kurz warten und erneut senden.':''); out.append(er); }
+    if(e.name==='AbortError') meta.textContent=`${model} · Cancelled`;
+    else { meta.textContent=`${model} · Failed`; const er=document.createElement('div'); er.className='err'; er.textContent=e.message+(/429/.test(e.message)?' Wait a moment and send again.':''); out.append(er); }
   }finally{
     bar.remove(); pgAbort=null; $('pgSend').disabled=false; $('pgStop').hidden=true; refreshStats();
   }
