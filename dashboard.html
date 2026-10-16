@@ -1,127 +1,80 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="de">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>oc-free-api</title>
 <style>
-  :root{
-    color-scheme: dark;
-    --bg:#0d1117; --panel:#161b22; --panel2:#1b2129; --line:#262c36;
-    --txt:#d8dde3; --mut:#8b949e; --accent:#3fb950; --dim:#6e7681;
-  }
+  :root{ color-scheme: dark; --line:#262c36; --mut:#8b949e; --accent:#3fb950; }
   *{ box-sizing:border-box; }
-  body{ margin:0; background:var(--bg); color:var(--txt);
-        font:14px/1.5 "Segoe UI",system-ui,sans-serif; }
-  main{ max-width:960px; margin:0 auto; padding:32px 20px 56px; }
-
-  header{ display:flex; align-items:center; gap:10px; padding-bottom:16px; border-bottom:1px solid var(--line); }
-  header h1{ font-size:15px; font-weight:600; margin:0; }
-  .dot{ width:8px; height:8px; border-radius:50%; background:var(--accent); box-shadow:0 0 6px var(--accent); }
-  .dot.down{ background:#f85149; box-shadow:0 0 6px #f85149; }
-  header .sub{ color:var(--mut); font-size:12px; }
-  header .right{ margin-left:auto; color:var(--dim); font:12px ui-monospace,Consolas,monospace; }
-
-  .grid{ display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px; }
-  @media (max-width:760px){ .grid{ grid-template-columns:1fr; } }
-
-  section{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
-  section h2{ margin:0 0 12px; font-size:10px; font-weight:600; letter-spacing:.12em;
-              text-transform:uppercase; color:var(--mut); }
-
-  .row{ display:flex; align-items:center; gap:10px; padding:6px 0; border-top:1px solid #1e242d; }
-  .row:first-of-type{ border-top:none; }
-  .row .label{ flex:0 0 92px; color:var(--mut); font-size:12px; }
-  .row code{ flex:1 1 auto; font:12.5px "Cascadia Code",ui-monospace,Consolas,monospace; overflow-wrap:anywhere; }
-  .row .btns{ flex:0 0 auto; display:flex; gap:6px; }
-
-  button{ font:12px "Segoe UI",system-ui,sans-serif; background:var(--panel2); color:var(--txt);
-          border:1px solid var(--line); border-radius:6px; padding:4px 10px; cursor:pointer; }
-  button:hover{ border-color:#3d444d; background:#232a33; }
-  button:disabled{ opacity:.4; cursor:wait; }
-  button.accent{ color:var(--accent); border-color:#2d5241; }
+  body{ margin:0; background:#0d1117; color:#d8dde3; font:15px/1.55 "Segoe UI",system-ui,sans-serif; }
+  main{ max-width:640px; margin:0 auto; padding:48px 24px 64px; }
+  h1{ font-size:16px; font-weight:600; margin:0; display:flex; align-items:center; gap:9px; }
+  .dot{ width:8px; height:8px; border-radius:50%; background:var(--accent); }
+  .dot.down{ background:#f85149; }
+  small{ color:var(--mut); font-weight:400; }
+  section{ margin-top:34px; padding-top:22px; border-top:1px solid var(--line); }
+  h2{ margin:0 0 12px; font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--mut); }
+  .row{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; padding:5px 0; }
+  .row .label{ color:var(--mut); font-size:13px; flex:0 0 auto; }
+  .row code{ font:13px "Cascadia Code",ui-monospace,Consolas,monospace; overflow-wrap:anywhere; }
+  button{ font:inherit; font-size:12px; background:#161b22; border:1px solid var(--line); border-radius:6px; padding:3px 10px; cursor:pointer; color:#d8dde3; }
+  button:hover{ border-color:#3d444d; }
+  button.accent{ color:var(--accent); border-color:var(--accent); }
   button.danger{ color:#f85149; border-color:#5c312e; }
-
-  table{ width:100%; border-collapse:collapse; font-size:13px; }
-  td{ padding:6px 0; border-top:1px solid #1e242d; }
-  td:first-child{ border-top:none; font:12.5px "Cascadia Code",ui-monospace,Consolas,monospace; width:42%; }
-  .test{ min-width:54px; }
-  .res{ display:block; color:var(--mut); font-size:12px; text-align:right; overflow-wrap:anywhere; }
+  button:disabled{ opacity:.4; cursor:wait; }
+  .test{ min-width:56px; }
+  .res{ color:var(--mut); font-size:12px; text-align:right; overflow-wrap:anywhere; }
   .res.ok{ color:var(--accent); } .res.err{ color:#f85149; }
-
-  #log{ font:12px/1.7 "Cascadia Code",ui-monospace,Consolas,monospace; color:#9aa4af;
-        max-height:250px; overflow:auto; white-space:pre-wrap; }
-  .actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
-
-  details{ margin-top:14px; }
-  summary{ cursor:pointer; color:var(--mut); font-size:12px; outline:none; }
-  summary:hover{ color:var(--txt); }
-  pre{ margin:10px 0 0; background:var(--bg); border:1px solid var(--line); border-radius:8px;
-       padding:12px; font:12px/1.6 "Cascadia Code",ui-monospace,Consolas,monospace; overflow-x:auto; }
-  footer{ margin-top:28px; color:var(--dim); font-size:11.5px; text-align:center; }
-  #toast{ position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
-          background:#232a33; border:1px solid var(--line); color:var(--txt); border-radius:8px;
-          padding:8px 16px; font-size:12px; opacity:0; transition:opacity .25s; pointer-events:none; }
+  #log{ font:12px/1.7 "Cascadia Code",ui-monospace,Consolas,monospace; color:#9aa4af; max-height:220px; overflow:auto; white-space:pre-wrap; }
+  .actions{ display:flex; gap:8px; flex-wrap:wrap; }
+  details summary{ cursor:pointer; color:var(--mut); font-size:12px; margin-top:10px; outline:none; }
+  pre{ margin:10px 0 0; background:#12161c; border:1px solid var(--line); border-radius:8px; padding:12px; font:12px/1.6 ui-monospace,Consolas,monospace; overflow-x:auto; }
+  footer{ margin-top:40px; color:var(--mut); font-size:12px; }
+  #toast{ position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#232a33; color:#d8dde3; border:1px solid var(--line); border-radius:6px; padding:7px 14px; font-size:12px; opacity:0; transition:opacity .25s; pointer-events:none; }
 </style>
 </head>
 <body>
 <main>
-  <header>
-    <span class="dot" id="dot"></span>
-    <h1>oc-free-api</h1>
-    <span class="sub">OpenCode free models · OpenAI-kompatibel</span>
-    <span class="right" id="modelsCount"></span>
-  </header>
+  <h1><span id="dot" class="dot"></span> oc-free-api <small>┬╖ OpenCode free models</small></h1>
 
-  <div class="grid">
-    <section>
-      <h2>Zugang</h2>
-      <div class="row"><span class="label">Dashboard</span><code id="urlDash"></code></div>
-      <div class="row"><span class="label">Base URL</span><code id="urlOpenai"></code>
-        <span class="btns"><button data-copy="urlOpenai">Kopieren</button></span>
-      </div>
-      <div class="row" id="rowLan" hidden><span class="label">Netzwerk</span><code id="urlLan"></code></div>
-      <div class="row" id="rowKey"><span class="label">API-Key</span><code id="apiKey"></code>
-        <span class="btns"><button data-copy="apiKey">Kopieren</button></span>
-      </div>
-      <div class="row"><span class="label">Aktionen</span>
-        <span class="btns">
-          <button class="accent" id="btnRefresh">Modelle aktualisieren</button>
-          <button id="btnKey">Key neu generieren</button>
-          <button class="danger" id="btnStop">Server stoppen</button>
-        </span>
-      </div>
-    </section>
-
-    <section>
-      <h2>Live-Log <small style="color:var(--dim)"> (letzte 60)</small></h2>
-      <div id="log">–</div>
-    </section>
-  </div>
-
-  <section style="margin-top:16px">
-    <h2>Modelle — „Test“ sendet eine echte Mini-Anfrage</h2>
-    <table id="tbl"></table>
+  <section>
+    <h2>Zugang</h2>
+    <div class="row"><span class="label">Dashboard (diese Seite)</span><code id="urlDash"></code></div>
+    <div class="row"><span class="label">OpenAI-Base-URL</span><code id="urlOpenai"></code><button data-copy="urlOpenai">Kopieren</button></div>
+    <div class="row" id="rowLan" hidden><span class="label">Netzwerk</span><code id="urlLan"></code></div>
+    <div class="row"><span class="label">API-Key</span><code id="apiKey"></code><button data-copy="apiKey">Kopieren</button></div>
   </section>
 
   <section>
+    <h2>Modelle ΓÇö Test-Button sendet eine echte Anfrage</h2>
+    <table style="width:100%; border-collapse:collapse" id="tbl"></table>
+  </section>
+
+  <section>
+    <h2>Live-Log</h2>
+    <div id="log">ΓÇô</div>
+  </section>
+
+  <section>
+    <div class="actions">
+      <button class="accent" id="btnRefresh">Modelle aktualisieren</button>
+      <button id="btnKey">Key neu generieren</button>
+      <button class="danger" id="btnStop">Server stoppen</button>
+    </div>
     <details>
-      <summary>Client-Snippet (Python · openai-SDK)</summary>
+      <summary>Client-Snippet (Python, OpenAI-kompatibel)</summary>
       <pre id="snip"></pre>
-      <pre>Ollama-style Clients:  base = http://&lt;host&gt;:8787  (kein Key, /api/*)</pre>
     </details>
   </section>
 
-  <footer>Persönliche Nutzung · keine Reselling · README + AGENT-SETUP im Repo</footer>
+  <footer>Pers├╢nliche Nutzung ┬╖ <code id="status" class="res"></code></footer>
 </main>
 <div id="toast"></div>
 <script>
 const $=id=>document.getElementById(id);
 const toast=m=>{const t=$('toast');t.textContent=m;t.style.opacity=1;clearTimeout(t._h);t._h=setTimeout(()=>t.style.opacity=0,1500)};
-document.addEventListener('click',e=>{ // copy buttons
-  const b=e.target.closest('[data-copy]');
-  if(b){ navigator.clipboard.writeText($(b.dataset.copy).textContent.trim()); toast('kopiert'); }
-});
+document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>{navigator.clipboard.writeText($(b.dataset.copy).textContent.trim());toast('kopiert')});
 
 async function api(p,body){
   const r=await fetch(p,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
@@ -132,40 +85,35 @@ async function api(p,body){
 
 function render(d){
   $('dot').classList.remove('down');
-  $('urlDash').textContent = location.origin;
-  $('urlOpenai').textContent = location.origin+'/v1';
-  $('modelsCount').textContent = (d.models||[]).length+' Modelle';
+  $('urlDash').textContent=location.origin;
+  $('urlOpenai').textContent=location.origin+'/v1';
   if(d.lan_ip){ $('rowLan').hidden=false; $('urlLan').textContent='http://'+d.lan_ip+':'+location.port+'/'; }
   $('apiKey').textContent=d.api_key;
-  $('snip').textContent=`from openai import OpenAI\nc=OpenAI(\n    base_url="${location.origin}/v1",\n    api_key="${d.api_key}",\n)\nc.chat.completions.create(model="big-pickle",\n    messages=[{"role":"user","content":"hi"}])`;
+  $('snip').textContent=`from openai import OpenAI\nclient=OpenAI(\n    base_url="${location.origin}/v1",\n    api_key="${d.api_key}",\n)\nr=client.chat.completions.create(model="big-pickle",\n    messages=[{"role":"user","content":"hi"}])`;
   const tb=$('tbl'); tb.innerHTML='';
   (d.models||[]).forEach(m=>{
-    const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${m}</td><td style="width:38%"><span class="res">–</span></td>`+
-                 `<td style="width:70px; text-align:right"><button class="test" data-m="${m}">Test</button></td>`;
+    const tr=document.createElement('tr'); tr.style.borderBottom='1px solid var(--line)';
+    tr.innerHTML=`<td style="padding:6px 0; font:13px ui-monospace,monospace">${m}</td>`+
+      `<td style="width:120px; text-align:right"><button class="test" data-m="${m}">Test</button></td>`+
+      `<td style="width:52%"><span class="res" id="res"></span></td>`;
     tb.appendChild(tr);
-    const span=tr.querySelector('.res');
-    tr.querySelector('button').onclick=e=>testModel(m,span,e.target);
+    tr.querySelector('button').onclick=e=>testModel(m,tr.querySelector('.res'),e.target);
   });
-  setLog(d.log||[]);
-}
-function setLog(entries){
-  const l=$('log');
-  l.textContent=entries.slice(-60).map(e=>e.t+'  '+e.msg).join('\n')||'–';
-  l.scrollTop=1e9;
+  $('log').textContent=(d.log||[]).slice(-60).map(e=>e.t+'  '+e.msg).join('\n')||'ΓÇô';
+  $('log').scrollTop=1e9;
 }
 async function load(){ try{ render(await api('/api/dashboard')) }catch(e){ $('dot').classList.add('down') } }
 async function testModel(m,span,btn){
-  span.className='res'; span.textContent='…'; btn.disabled=true;
+  span.className='res'; span.textContent='ΓÇª'; btn.disabled=true;
   try{ const r=await api('/api/dashboard/test',{model:m});
-    span.classList.add('ok'); span.textContent=`${(r.latency_ms/1000).toFixed(1)}s · ${r.tokens} tok`;
-  }catch(e){ span.classList.add('err'); span.textContent=e.message.slice(0,80); }
+    span.classList.add('ok'); span.textContent=`${(r.latency_ms/1000).toFixed(1)}s ┬╖ ${r.tokens} tok`;
+  }catch(e){ span.classList.add('err'); span.textContent=e.message.slice(0,90); }
   btn.disabled=false; setTimeout(load,400);
 }
 $('btnRefresh').onclick=async e=>{e.target.disabled=true;try{await api('/api/dashboard/refresh',{});toast('aktualisiert');load()}catch(err){toast(err.message)}finally{e.target.disabled=false}};
 $('btnKey').onclick=async e=>{e.target.disabled=true;try{await api('/api/dashboard/key',{});toast('neuer Key aktiv');load()}catch(err){toast(err.message)}finally{e.target.disabled=false}};
-$('btnStop').onclick=async()=>{if(confirm('wirklich stoppen?')){try{await api('/api/dashboard/stop',{});toast('stoppt …')}catch(e){}}};
-setInterval(async()=>{try{const r=await api('/api/dashboard/log');setLog(r.log||[])}catch(e){}},1500);
+$('btnStop').onclick=async()=>{if(confirm('wirklich stoppen?')){try{await api('/api/dashboard/stop',{});toast('stoppt ΓÇª')}catch(e){}}};
+setInterval(async()=>{try{const r=await api('/api/dashboard/log');const l=$('log');l.textContent=(r.log||[]).slice(-60).map(e=>e.t+'  '+e.msg).join('\n');l.scrollTop=1e9}catch(e){}},1500);
 load();
 </script>
 </body>
