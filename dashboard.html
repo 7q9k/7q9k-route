@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oc-free-api — Dashboard</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 ui-sans-serif,system-ui,"Segoe UI",sans-serif; background:#0d1117; color:#e6edf3; }
+  main { max-width:1080px; margin:0 auto; padding:24px 16px 60px; }
+  h1 { font-size:20px; margin:0; display:flex; gap:10px; align-items:center; }
+  .dot { width:10px; height:10px; border-radius:50%; background:#3fb950; box-shadow:0 0 8px #3fb95088; }
+  .dot.down { background:#f85149; box-shadow:0 0 8px #f8514988; }
+  small.muted { color:#8b949e; font-weight:400; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:12px; margin:18px 0; }
+  .card { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:14px; }
+  .card h2 { margin:0 0 8px; font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:#8b949e; }
+  .row { display:flex; gap:8px; align-items:center; justify-content:space-between; }
+  code.value { background:#0d1117; border:1px solid #30363d; padding:4px 8px; border-radius:6px; font-size:13px; word-break:break-all; }
+  button { cursor:pointer; background:#21262d; color:#e6edf3; border:1px solid #30363d; border-radius:8px; padding:7px 12px; font-size:13px; }
+  button:hover { background:#30363d; }
+  button.primary { background:#1f6feb; border-color:#1f6feb; }
+  button.danger { background:#b62324; border-color:#b62324; }
+  button:disabled { opacity:.5; cursor:wait; }
+  .snip { display:grid; gap:8px; }
+  pre { margin:0; background:#0d1117; border:1px solid #30363d; border-radius:8px; padding:10px; overflow-x:auto; font:12px ui-monospace,Consolas,monospace; }
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid #21262d; font-size:13px; }
+  th { color:#8b949e; font-weight:600; }
+  .result { color:#8b949e; font-size:12px; max-width:420px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ok { color:#3fb950; } .err { color:#f85149; }
+  #log { height:230px; overflow:auto; background:#0d1117; border:1px solid #30363d; border-radius:8px; padding:10px; font:12px ui-monospace,Consolas,monospace; white-space:pre-wrap; color:#9fb3c8; }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; margin:6px 0 18px; }
+  .muted { color:#8b949e; }
+  #toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1f6feb; color:#fff; border-radius:8px; padding:8px 16px; opacity:0; transition:opacity .2s; pointer-events:none; }
+</style>
+</head>
+<body>
+<main>
+  <h1><span id="statusDot" class="dot"></span> oc-free-api <small class="muted">OpenCode Zen free models — lokales Dashboard</small></h1>
+
+  <div class="cards">
+    <div class="card">
+      <h2>Base URL (OpenAI-kompatibel)</h2>
+      <div class="row"><code class="value" id="baseUrl"></code><button data-copy="baseUrl">Kopieren</button></div>
+    </div>
+    <div class="card">
+      <h2>API-Key (Ollama/LM-Studio-Clients: Base ohne <code>/v1</code> ohne Key)</h2>
+      <div class="row"><code class="value" id="apiKey"></code><button data-copy="apiKey">Kopieren</button></div>
+    </div>
+  </div>
+
+  <div class="snip card">
+    <h2>Client-Config (irgendwo einsetzen)</h2>
+    <pre id="snipOai"></pre>
+    <pre id="snipOllama">Ollama-Style-Clients:  base_url = http://127.0.0.1:8787   (kein Key nötig, Endpoints /api/*)</pre>
+  </div>
+
+  <div class="actions">
+    <button class="primary" id="btnTest">Modell-Schnelltest</button>
+    <button id="btnRefresh">Models aktualisieren</button>
+    <button id="btnKey">Neuen Key generieren</button>
+    <button class="danger" id="btnStop">Server stoppen</button>
+  </div>
+
+  <div class="card" style="margin-bottom:12px">
+    <h2>Modelle (klick auf „Test“ schickt eine echte Anfrage)</h2>
+    <table><thead><tr><th style="width:34%">ID</th><th>Aktion + letztes Ergebnis</th></tr></thead><tbody id="models"></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Live-Request-Log (letzte 120)</h2>
+    <div id="log"></div>
+  </div>
+
+  <p class="muted" style="margin-top:16px">Persönliche Nutzung — kein Reselling. Details in AGENT-SETUP.md im Repo.</p>
+</main>
+<div id="toast"></div>
+<script>
+const $ = id => document.getElementById(id);
+const toast = msg => { const t=$('toast'); t.textContent=msg; t.style.opacity=1; clearTimeout(t._h); t._h=setTimeout(()=>t.style.opacity=0,1600); };
+document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>{navigator.clipboard.writeText($(b.dataset.copy).textContent.trim()); toast('kopiert');});
+
+async function api(path, body){
+  const r = await fetch(path, body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
+  const j = await r.json();
+  if(!r.ok || j.ok===false) throw new Error(j.error?.message||j.message||('HTTP '+r.status));
+  return j;
+}
+
+function render(d){
+  $('statusDot').classList.toggle('down', false);
+  $('baseUrl').textContent = location.origin + '/v1';
+  $('apiKey').textContent = d.api_key;
+  $('snipOai').textContent = `from openai import OpenAI\nclient = OpenAI(\n    base_url="${location.origin}/v1",\n    api_key="${d.api_key}",\n)\nresp = client.chat.completions.create(\n    model="big-pickle",\n    messages=[{"role":"user","content":"hi"}],\n)`;
+  const rows = (d.models||[]).map(m=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td><code>${m}</code></td><td><div class="row"><button data-m="${m}">Test</button><span class="result" id="res-${m}"></span></div></td>`;
+    return tr;
+  });
+  const tb=$('models'); tb.innerHTML=''; rows.forEach(r=>tb.appendChild(r));
+  tb.querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>testModel(b.dataset.m,b));
+  const log=$('log'); log.textContent=(d.log||[]).map(e=>`${e.t}  ${e.msg}`).join('\n'); log.scrollTop=log.scrollHeight;
+}
+async function load(){ try{ render(await api('/api/dashboard')); }catch(e){ $('statusDot').classList.add('down'); } }
+async function testModel(model,btn){
+  const span=$('res-'+CSS.escape(model)); span.textContent='… testet'; span.className='result'; btn.disabled=true;
+  try{
+    const r=await api('/api/dashboard/test',{model});
+    span.textContent=`${(r.latency_ms/1000).toFixed(1)}s · ${r.tokens} tok · „${r.text.slice(0,80)}“`; span.classList.add('ok');
+  }catch(e){ span.textContent='Fehler: '+e.message; span.classList.add('err'); }
+  btn.disabled=false; setTimeout(load,300);
+}
+$('btnRefresh').onclick=async e=>{ e.target.disabled=true; try{ const r=await api('/api/dashboard/refresh',{}); toast('Modelle aktualisiert'); render(await api('/api/dashboard')); }catch(err){ toast(err.message); } finally{ e.target.disabled=false; } };
+$('btnKey').onclick=async e=>{ e.target.disabled=true; try{ const r=await api('/api/dashboard/key',{}); toast('Neuer Key aktiv'); render(await api('/api/dashboard')); }catch(err){ toast(err.message); } finally{ e.target.disabled=false; } };
+$('btnStop').onclick=async()=>{ if(confirm('Server wirklich stoppen? Das CMD-Fenster bleibt offen, aber Anfragen scheitern dann.')){ try{ await api('/api/dashboard/stop',{}); toast('Server stoppt in 200 ms…'); }catch(err){ toast(err.message); } } };
+setInterval(async()=>{ try{ const r=await api('/api/dashboard/log'); const log=$('log'); log.textContent=(r.log||[]).map(e=>`${e.t}  ${e.msg}`).join('\n'); log.scrollTop=log.scrollHeight; }catch(e){} },1500);
+load();
+</script>
+</body>
+</html>

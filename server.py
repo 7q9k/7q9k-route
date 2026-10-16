@@ -28,10 +28,14 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterator
+
+DASHBOARD_FILE = Path(__file__).resolve().parent / "dashboard.html"
+REQUEST_LOG: deque = deque(maxlen=200)
 
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_CACHE = BASE_DIR / "models.json"
@@ -1008,6 +1012,73 @@ def ollama_generate_response(completion: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------- dashboard API
+
+_TEST_PROMPT = "Reply with exactly the token: OK-DASH"
+
+
+def open_upstream_events(req: dict[str, Any], model: str) -> Iterator[dict[str, Any]]:
+    """Shared upstream opener for the chat handler and the dashboard test."""
+    if uses_responses_api(model):
+        events = upstream_stream(RESPONSES_URL, build_responses_request(req))
+        return responses_events_to_deltas(events)
+    return upstream_stream(DIRECT_URL, build_chat_request({**req, "model": model}))
+
+
+def run_model_test(model: str, prompt: str | None = None) -> dict[str, Any]:
+    start = time.perf_counter()
+    req: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt or _TEST_PROMPT}],
+        "stream": False,
+    }
+    deltas = open_upstream_events(req, model)
+    completion = merge_deltas(deltas, model)
+    latency_ms = (time.perf_counter() - start) * 1000
+    message = completion["choices"][0]["message"]
+    usage = completion.get("usage") or {}
+    return {
+        "ok": True,
+        "text": str(message.get("content") or ""),
+        "latency_ms": round(latency_ms),
+        "tokens": int(usage.get("total_tokens", 0) or 0),
+    }
+
+
+def regenerate_api_key() -> str:
+    key = "sk-oc-free-" + secrets.token_hex(20)
+    KEY_FILE.write_text(key + "\n", encoding="utf-8")
+    try:
+        KEY_FILE.chmod(0o600)
+    except OSError:
+        pass
+    return key
+
+
+SERVER: Any = None
+
+
+def dashboard_state() -> dict[str, Any]:
+    try:
+        models = available_models()
+    except Exception:  # noqa: BLE001
+        models = list(FALLBACK_MODELS)
+    return {
+        "ok": True,
+        "api_key": api_key_cache() or "(benoetigt Neustart)",
+        "models": models,
+        "log": list(REQUEST_LOG),
+    }
+
+
+def api_key_cache() -> str | None:
+    try:
+        value = KEY_FILE.read_text(encoding="utf-8").strip()
+        return value or None
+    except OSError:
+        return None
+
+
 # ---------------------------------------------------------------- API key
 
 
@@ -1037,8 +1108,12 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
     # ---- helpers
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        message = format % args
+        REQUEST_LOG.append(
+            {"t": time.strftime("%H:%M:%S"), "msg": f"{self.address_string()} - {message}"}
+        )
         sys.stderr.write(
-            "[oc-free-api] %s - %s\n" % (self.address_string(), format % args)
+            "[oc-free-api] %s - %s\n" % (self.address_string(), message)
         )
 
     def _authorized(self) -> bool:
@@ -1075,6 +1150,19 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
+        if path == "/" or path == "/dashboard":
+            try:
+                payload = DASHBOARD_FILE.read_bytes()
+            except OSError:
+                self._send_error_json(500, "dashboard.html not found next to server.py")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if path == "/health":
             self._send_json(200, {"ok": True})
             return
@@ -1099,6 +1187,12 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
                     ],
                 },
             )
+            return
+        if path == "/api/dashboard/log":
+            self._send_json(200, {"log": list(REQUEST_LOG)})
+            return
+        if path == "/api/dashboard":
+            self._send_json(200, dashboard_state())
             return
         if path == "/api/tags":
             try:
@@ -1175,6 +1269,14 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             self._post_ollama_generate()
         elif path == "/api/show":
             self._post_ollama_show()
+        elif path == "/api/dashboard/refresh":
+            self._post_refresh_models()
+        elif path == "/api/dashboard/test":
+            self._post_dashboard_test()
+        elif path == "/api/dashboard/key":
+            self._post_new_key()
+        elif path == "/api/dashboard/stop":
+            self._post_stop_server()
         else:
             self._send_error_json(404, f"unknown path: {path}")
 
@@ -1205,10 +1307,34 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         return model
 
     def _open_upstream(self, req: dict[str, Any], model: str) -> Iterator[dict[str, Any]]:
-        if uses_responses_api(model):
-            events = upstream_stream(RESPONSES_URL, build_responses_request(req))
-            return responses_events_to_deltas(events)
-        return upstream_stream(DIRECT_URL, build_chat_request({**req, "model": model}))
+        return open_upstream_events(req, model)
+
+    # ---- dashboard API
+
+    def _post_refresh_models(self) -> None:
+        try:
+            available_models(refresh=True)
+            self._send_json(200, {"ok": True})
+        except Exception as exc:  # noqa: BLE001
+            self._send_error_json(502, f"model discovery failed: {exc}")
+
+    def _post_dashboard_test(self) -> None:
+        try:
+            req = self._read_json()
+            model = self._resolve_model(req.get("model"))
+            self._send_json(200, run_model_test(model, req.get("prompt")))
+        except ProxyError as exc:
+            self._send_error_json(exc.status_code, str(exc))
+
+    def _post_new_key(self) -> None:
+        new_key = regenerate_api_key()
+        OpenAICompatibleHandler.api_key = new_key
+        self._send_json(200, {"ok": True, "api_key": new_key})
+
+    def _post_stop_server(self) -> None:
+        self._send_json(200, {"ok": True, "stopping": True})
+        if SERVER is not None:
+            threading.Thread(target=SERVER.shutdown, daemon=True).start()
 
     def _post_chat_completions(self) -> None:
         if not self._authorized():
@@ -1557,12 +1683,15 @@ def main() -> None:
 
     server = ThreadingHTTPServer((args.host, args.port), OpenAICompatibleHandler)
     server.daemon_threads = True
+    global SERVER
+    SERVER = server
     base = f"http://{args.host}:{args.port}/v1"
 
     print("oc-free-api: OpenCode Zen free models via OpenAI-compatible API")
-    print(f"  base_url : {base}")
-    print(f"  api_key  : {api_key}")
-    print(f"  models   : {', '.join(models)}")
+    print(f"  dashboard : http://{args.host}:{args.port}/")
+    print(f"  base_url  : {base}")
+    print(f"  api_key   : {api_key}")
+    print(f"  models    : {', '.join(models)}")
     print()
     print("Client config:")
     print(f'  base_url = "{base}"')

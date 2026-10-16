@@ -28,6 +28,8 @@ Konsole angezeigt. Optionen:
 
 | Pfad | Beschreibung |
 |---|---|
+| `GET /` · `GET /dashboard` | **Web-Dashboard**: Status, Key, Modelle mit Test-Button, Live-Log |
+| `POST /api/dashboard/{test,refresh,key,stop}` | Dashboard-Aktionen (Modell-Test, Model-Refresh, Key-Reset, Server stoppen) |
 | `GET /health` | Liveness-Check (ohne Auth) |
 | `GET /v1/models` · `GET /api/v1/models` | Modell-Liste (OpenAI-Format, ohne Auth) |
 | `GET /api/tags` · `GET /api/ps` · `POST /api/show` | **Ollama**-Endpoints |
