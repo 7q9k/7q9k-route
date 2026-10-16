@@ -232,6 +232,19 @@ class PureFunctionTests(unittest.TestCase):
             again.reset()
             self.assertEqual(again.snapshot()["requests"], 0)
 
+    def test_metrics_load_old_bucket_format(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "stats.json"
+            hour = int(time.time() // 3600)
+            minute = int(time.time() // 60)
+            path.write_text(json.dumps({"version": 1, "requests": 3, "minutes": {str(minute): [3, 1]},
+                                        "hours": {str(hour): 3}}), encoding="utf-8")
+            m = server.Metrics(path)
+            self.assertTrue(m.load())
+            snap = m.snapshot()
+            self.assertEqual(snap["timeline"][-1], {"requests": 3, "errors": 1, "tokens_in": 0, "tokens_out": 0})
+            self.assertEqual(snap["limits"]["requests_24h"], 3)
+
     def test_metrics_load_ignores_broken_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "stats.json"
@@ -282,6 +295,17 @@ class PureFunctionTests(unittest.TestCase):
             self.assertFalse(p.refresh())
             self.assertIn("offline", p.info()["error"])
 
+    def test_load_config_defaults_and_env(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(server, "CONFIG_FILE", Path(tmp) / "c.json"):
+            self.assertEqual(server.load_config()["access"], "network")
+            server.CONFIG_FILE.write_text('{"access": "bogus", "port": "x", "extra": 1}', encoding="utf-8")
+            config = server.load_config()
+            self.assertEqual((config["access"], config["port"]), ("network", 8787))
+            self.assertNotIn("extra", config)
+            with mock.patch.dict(server.os.environ, {"OCFREE_ACCESS": "local", "OCFREE_PORT": "9001"}):
+                config = server.load_config()
+            self.assertEqual((config["access"], config["port"]), ("local", 9001))
+
     def test_metrics_timeline_and_models(self):
         m = server.Metrics()
         m.record({"status": 200, "ms": 100, "model": "a", "tokens_in": 1, "tokens_out": 2}, inference=True)
@@ -291,7 +315,9 @@ class PureFunctionTests(unittest.TestCase):
         self.assertEqual((snap["requests"], snap["errors"]), (2, 1))
         self.assertEqual(snap["models"]["a"]["avg_ms"], 200)
         self.assertEqual(len(snap["timeline"]), m.TIMELINE_MINUTES)
-        self.assertEqual(snap["timeline"][-1], {"requests": 2, "errors": 1})
+        self.assertEqual(snap["timeline"][-1], {"requests": 2, "errors": 1, "tokens_in": 1, "tokens_out": 2})
+        self.assertEqual(len(snap["hourly"]), 24)
+        self.assertEqual(snap["hourly"][-1]["requests"], 2)
         self.assertEqual(len(snap["log"]), 3)
 
 
@@ -305,6 +331,8 @@ class ServerTests(unittest.TestCase):
             mock.patch.object(server, "available_models", lambda *a, **k: list(MODELS)),
             mock.patch.object(server, "_lan_ip", lambda: "192.168.1.20"),
             mock.patch.object(server, "_emit", lambda *a, **k: None),
+            mock.patch.object(server, "CONFIG_FILE", Path(cls.tmp.name) / "config.json"),
+            mock.patch.object(server, "autostart_enabled", lambda: None),
         ]
         for p in cls.patches:
             p.start()
@@ -606,6 +634,48 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 429)
         self.settle()
         self.assertIsNotNone(server.METRICS.snapshot()["limits"]["last_limit_hit"])
+
+    def test_models_alias_without_v1(self):
+        status, body = self.request("GET", "/models")
+        self.assertEqual((status, [m["id"] for m in json.loads(body)["data"]]), (200, MODELS))
+
+    def test_proxied_request_is_not_local(self):
+        headers = {"X-Forwarded-For": "203.0.113.9"}
+        self.assertEqual(self.request("POST", "/v1/chat/completions", {"model": "big-pickle"}, headers)[0], 401)
+        self.assertEqual(self.request("GET", "/api/dashboard/settings", headers=headers)[0], 403)
+        state = json.loads(self.request("GET", "/api/dashboard", headers={**headers, "Authorization": f"Bearer {KEY}"})[1])
+        self.assertIsNone(state["api_key"])
+
+    def test_settings_roundtrip(self):
+        server.CONFIG = dict(server.DEFAULT_CONFIG)
+        self.addCleanup(setattr, server, "CONFIG", dict(server.DEFAULT_CONFIG))
+        status, body = self.request("GET", "/api/dashboard/settings")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["access"], "network")
+        status, body = self.request("POST", "/api/dashboard/settings",
+                                    {"access": "local", "port": 9100, "open_browser": False})
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertEqual((result["access"], result["port"], result["open_browser"]), ("local", 9100, False))
+        self.assertTrue(result["restart_required"])
+        saved = json.loads(server.CONFIG_FILE.read_text(encoding="utf-8"))
+        self.assertEqual((saved["access"], saved["port"]), ("local", 9100))
+        self.assertEqual(self.request("POST", "/api/dashboard/settings", {"port": 70000})[0], 400)
+        self.assertEqual(self.request("POST", "/api/dashboard/settings", {"access": "server"})[0], 400)
+
+    def test_settings_admin_only(self):
+        self.as_remote()
+        ok = {"Authorization": f"Bearer {KEY}"}
+        self.assertEqual(self.request("GET", "/api/dashboard/settings", headers=ok)[0], 403)
+        self.assertEqual(self.request("POST", "/api/dashboard/settings", {"port": 1}, ok)[0], 403)
+        self.assertEqual(self.request("POST", "/api/dashboard/restart", {}, ok)[0], 403)
+
+    def test_restart_request_sets_flag(self):
+        self.addCleanup(setattr, server, "RESTART_REQUESTED", False)
+        status, body = self.request("POST", "/api/dashboard/restart", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["restarting"])
+        self.assertTrue(server.RESTART_REQUESTED)
 
     def test_dashboard_test_endpoint(self):
         status, body = self.request("POST", "/api/dashboard/test", {"model": "big-pickle"})

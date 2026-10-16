@@ -9,29 +9,35 @@ import os
 import secrets
 import socket
 import string
+import subprocess
 import sys
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import webbrowser
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.3.0"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 RES_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))
 DASHBOARD_FILE = RES_DIR / "dashboard.html"
 ASSETS_DIR = RES_DIR / "assets"
-STATS_FILE = BASE_DIR / "stats.json"
-PRICING_FILE = BASE_DIR / "pricing.json"
-ASSET_TYPES = {".woff2": "font/woff2", ".svg": "image/svg+xml", ".css": "text/css; charset=utf-8"}
-MODEL_CACHE = BASE_DIR / "models.json"
-KEY_FILE = BASE_DIR / "api-key.txt"
+DATA_DIR = Path(os.environ.get("OCFREE_DATA_DIR") or BASE_DIR).resolve()
+STATS_FILE = DATA_DIR / "stats.json"
+PRICING_FILE = DATA_DIR / "pricing.json"
+CONFIG_FILE = DATA_DIR / "config.json"
+LOG_FILE = DATA_DIR / "server.log"
+ASSET_TYPES = {".woff2": "font/woff2", ".svg": "image/svg+xml", ".css": "text/css; charset=utf-8",
+               ".ico": "image/x-icon", ".png": "image/png"}
+MODEL_CACHE = DATA_DIR / "models.json"
+KEY_FILE = DATA_DIR / "api-key.txt"
 
 DIRECT_URL = "https://opencode.ai/inference/v1/chat/completions"
 RESPONSES_URL = "https://opencode.ai/inference/v1/responses"
@@ -1359,7 +1365,7 @@ class Metrics:
         self.latency_total = 0.0
         self.models: dict[str, dict[str, float]] = {}
         self.minutes: dict[int, list[int]] = {}
-        self.hours: dict[int, int] = {}
+        self.hours: dict[int, list[int]] = {}
         self.limit_hits: list[float] = []
         self.log: deque = deque(maxlen=200)
 
@@ -1393,13 +1399,15 @@ class Metrics:
             stats["latency_total"] += entry["ms"]
             stats["last_ms"] = entry["ms"]
             minute = int(time.time() // 60)
-            bucket = self.minutes.setdefault(minute, [0, 0])
-            bucket[0] += 1
-            bucket[1] += failed
+            hour = int(time.time() // 3600)
+            for buckets, key in ((self.minutes, minute), (self.hours, hour)):
+                bucket = buckets.setdefault(key, [0, 0, 0, 0])
+                bucket[0] += 1
+                bucket[1] += failed
+                bucket[2] += tokens_in
+                bucket[3] += tokens_out
             for old in [m for m in self.minutes if m <= minute - self.TIMELINE_MINUTES]:
                 del self.minutes[old]
-            hour = int(time.time() // 3600)
-            self.hours[hour] = self.hours.get(hour, 0) + 1
             for old in [h for h in self.hours if h <= hour - 48]:
                 del self.hours[old]
             if self.is_limit_error(entry):
@@ -1414,17 +1422,23 @@ class Metrics:
 
     def snapshot(self) -> dict[str, Any]:
         now_minute = int(time.time() // 60)
+        empty = [0, 0, 0, 0]
+
+        def point(bucket: list[int]) -> dict[str, int]:
+            return {"requests": bucket[0], "errors": bucket[1], "tokens_in": bucket[2], "tokens_out": bucket[3]}
+
         with self.lock:
-            timeline = [
-                self.minutes.get(m, [0, 0])
-                for m in range(now_minute - self.TIMELINE_MINUTES + 1, now_minute + 1)
-            ]
             now = time.time()
             hour = int(now // 3600)
+            timeline = [
+                point(self.minutes.get(m, empty))
+                for m in range(now_minute - self.TIMELINE_MINUTES + 1, now_minute + 1)
+            ]
+            hourly = [point(self.hours.get(h, empty)) for h in range(hour - 23, hour + 1)]
             return {
                 "limits": {
-                    "requests_5h": sum(c for h, c in self.hours.items() if h > hour - 5),
-                    "requests_24h": sum(c for h, c in self.hours.items() if h > hour - 24),
+                    "requests_5h": sum(b[0] for h, b in self.hours.items() if h > hour - 5),
+                    "requests_24h": sum(b[0] for h, b in self.hours.items() if h > hour - 24),
                     "last_limit_hit": self.limit_hits[-1] if self.limit_hits else None,
                     "limit_hits_24h": sum(1 for t in self.limit_hits if t > now - 86400),
                 },
@@ -1451,7 +1465,8 @@ class Metrics:
                     }
                     for name, s in self.models.items()
                 },
-                "timeline": [{"requests": r, "errors": e} for r, e in timeline],
+                "timeline": timeline,
+                "hourly": hourly,
                 "log": list(self.log),
             }
 
@@ -1514,13 +1529,14 @@ class Metrics:
                     stats.update({k: raw[k] for k in stats if isinstance(raw.get(k), (int, float))})
                 self.models[str(name)] = stats
             self.minutes = {
-                int(k): [int(v[0]), int(v[1])]
+                int(k): ([int(x) for x in v] + [0, 0, 0, 0])[:4]
                 for k, v in (state.get("minutes") or {}).items()
-                if isinstance(v, list) and len(v) == 2
+                if isinstance(v, list) and len(v) in (2, 4)
             }
             self.hours = {
-                int(k): int(v) for k, v in (state.get("hours") or {}).items()
-                if isinstance(v, (int, float))
+                int(k): [int(v), 0, 0, 0] if isinstance(v, (int, float)) else ([int(x) for x in v] + [0, 0, 0, 0])[:4]
+                for k, v in (state.get("hours") or {}).items()
+                if isinstance(v, (int, float)) or (isinstance(v, list) and len(v) == 4)
             }
             self.limit_hits = [
                 float(t) for t in state.get("limit_hits") or [] if isinstance(t, (int, float))
@@ -1731,6 +1747,119 @@ PRICING = Pricing()
 SERVER: Any = None
 BOUND_OPEN: bool = False
 BOUND_PORT: int = 8787
+BOUND_HOST: str = "0.0.0.0"
+RESTART_REQUESTED = False
+DEFAULT_PORT = 8787
+CLI_HOST: str | None = None
+CLI_PORT: int | None = None
+
+DEFAULT_CONFIG: dict[str, Any] = {
+    "access": "network",
+    "port": DEFAULT_PORT,
+    "open_browser": True,
+}
+ACCESS_HOSTS = {"local": "127.0.0.1", "network": "0.0.0.0"}
+CONFIG: dict[str, Any] = dict(DEFAULT_CONFIG)
+CONFIG_LOCK = threading.Lock()
+
+
+def load_config() -> dict[str, Any]:
+    config = dict(DEFAULT_CONFIG)
+    try:
+        stored = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        if isinstance(stored, dict):
+            config.update({k: v for k, v in stored.items() if k in DEFAULT_CONFIG})
+    except (OSError, ValueError):
+        pass
+    if config.get("access") not in ACCESS_HOSTS:
+        config["access"] = DEFAULT_CONFIG["access"]
+    try:
+        config["port"] = int(config["port"])
+    except (TypeError, ValueError):
+        config["port"] = DEFAULT_PORT
+    env_access = os.environ.get("OCFREE_ACCESS")
+    if env_access in ACCESS_HOSTS:
+        config["access"] = env_access
+    if os.environ.get("OCFREE_PORT", "").isdigit():
+        config["port"] = int(os.environ["OCFREE_PORT"])
+    return config
+
+
+def save_config() -> None:
+    with CONFIG_LOCK:
+        data = json.dumps(CONFIG, indent=2)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = CONFIG_FILE.with_name(CONFIG_FILE.name + ".tmp")
+    tmp.write_text(data, encoding="utf-8")
+    os.replace(tmp, CONFIG_FILE)
+
+
+AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+AUTOSTART_NAME = "oc-free-api"
+
+
+def autostart_supported() -> bool:
+    return os.name == "nt"
+
+
+def autostart_command() -> str:
+    if FROZEN:
+        return f'"{sys.executable}" --background'
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    interpreter = pythonw if pythonw.exists() else Path(sys.executable)
+    return f'"{interpreter}" "{Path(__file__).resolve()}" --background'
+
+
+def autostart_enabled() -> bool | None:
+    if not autostart_supported():
+        return None
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY) as key:
+            winreg.QueryValueEx(key, AUTOSTART_NAME)
+            return True
+    except OSError:
+        return False
+
+
+def set_autostart(enabled: bool) -> None:
+    if not autostart_supported():
+        raise ProxyError("start with Windows is only available on Windows.", 400)
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY, 0, winreg.KEY_SET_VALUE) as key:
+        if enabled:
+            winreg.SetValueEx(key, AUTOSTART_NAME, 0, winreg.REG_SZ, autostart_command())
+        else:
+            try:
+                winreg.DeleteValue(key, AUTOSTART_NAME)
+            except FileNotFoundError:
+                pass
+
+
+def public_urls(port: int) -> dict[str, str | None]:
+    lan = _lan_ip() if BOUND_OPEN else None
+    return {
+        "local": f"http://localhost:{port}",
+        "network": f"http://{lan}:{port}" if lan and lan != "127.0.0.1" else None,
+    }
+
+
+def settings_payload() -> dict[str, Any]:
+    with CONFIG_LOCK:
+        config = dict(CONFIG)
+    wanted_host = CLI_HOST or ACCESS_HOSTS[config["access"]]
+    wanted_port = CLI_PORT or config["port"]
+    return {
+        "ok": True,
+        "access": config["access"],
+        "port": config["port"],
+        "open_browser": bool(config["open_browser"]),
+        "autostart": autostart_enabled(),
+        "data_dir": str(DATA_DIR),
+        "running": {"host": BOUND_HOST, "port": BOUND_PORT},
+        "restart_required": wanted_host != BOUND_HOST or wanted_port != BOUND_PORT,
+        "overridden": bool(CLI_HOST or CLI_PORT),
+    }
 
 
 def dashboard_state(*, local: bool) -> dict[str, Any]:
@@ -1739,6 +1868,7 @@ def dashboard_state(*, local: bool) -> dict[str, Any]:
         "ok": True,
         "version": APP_VERSION,
         "local": local,
+        "urls": public_urls(BOUND_PORT),
         "api_key": (api_key_cache() or "(restart required)") if local else None,
         "models": [
             {"id": m, "api": "responses" if uses_responses_api(m) else "chat"}
@@ -1814,21 +1944,80 @@ def _paint(text: str, color: str) -> str:
     return _COLORS[color] + text + _RESET
 
 
+LOG_STREAM: Any = None
+
+
 def _emit(line: str, stream: Any = None) -> None:
-    stream = stream or sys.stdout
-    try:
-        stream.write(line + "\n")
-    except UnicodeEncodeError:
-        stream.write(line.encode("ascii", "replace").decode("ascii") + "\n")
-    stream.flush()
+    targets = [LOG_STREAM] if LOG_STREAM is not None else [stream or sys.stdout]
+    for target in targets:
+        if target is None:
+            continue
+        try:
+            target.write(line + "\n")
+        except UnicodeEncodeError:
+            target.write(line.encode("ascii", "replace").decode("ascii") + "\n")
+        except (OSError, ValueError):
+            continue
+        try:
+            target.flush()
+        except (OSError, ValueError):
+            pass
 
 
 def _console_init(port: int) -> None:
     global VT
     for stream in (sys.stdout, sys.stderr):
-        if not stream.isatty() and hasattr(stream, "reconfigure"):
+        if stream is not None and not stream.isatty() and hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
-    VT = _enable_windows_vt(port)
+    VT = sys.stderr is not None and _enable_windows_vt(port)
+
+
+def open_log_file() -> None:
+    global LOG_STREAM, VT
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > 1_000_000:
+            os.replace(LOG_FILE, LOG_FILE.with_name(LOG_FILE.name + ".1"))
+        LOG_STREAM = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        LOG_STREAM = None
+    VT = False
+
+
+def _windows_console_open() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        kernel32 = ctypes.windll.kernel32
+        if not kernel32.AllocConsole():
+            return False
+        kernel32.SetConsoleTitleW("oc-free-api")
+        global CONSOLE_OUT
+        CONSOLE_OUT = open("CONOUT$", "w", encoding="utf-8", buffering=1)
+        sys.stdout = CONSOLE_OUT
+        sys.stderr = CONSOLE_OUT
+        return True
+    except Exception:
+        return False
+
+
+CONSOLE_OUT: Any = None
+
+
+def _windows_console_close() -> None:
+    global CONSOLE_OUT
+    sys.stdout = None
+    sys.stderr = None
+    if CONSOLE_OUT is not None:
+        try:
+            CONSOLE_OUT.close()
+        except Exception:
+            pass
+        CONSOLE_OUT = None
+    try:
+        ctypes.windll.kernel32.FreeConsole()
+    except Exception:
+        pass
 
 
 def _lan_ip() -> str:
@@ -1892,6 +2081,7 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
     ("GET", "/health"): ("open", "_get_health"),
     ("GET", "/favicon.ico"): ("open", "_get_favicon"),
     ("GET", "/v1/models"): ("open", "_get_models"),
+    ("GET", "/models"): ("open", "_get_models"),
     ("GET", "/api/v1/models"): ("open", "_get_models"),
     ("GET", "/api/tags"): ("open", "_get_ollama_tags"),
     ("GET", "/api/ps"): ("open", "_get_ollama_ps"),
@@ -1906,16 +2096,19 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/responses"): ("client", "_post_responses"),
     ("POST", "/api/chat"): ("client", "_post_ollama_chat"),
     ("POST", "/api/generate"): ("client", "_post_ollama_generate"),
-    ("GET", "/api/dashboard"): ("client", "_get_dashboard_state"),
-    ("GET", "/api/dashboard/stats"): ("client", "_get_dashboard_stats"),
-    ("GET", "/api/dashboard/log"): ("client", "_get_dashboard_log"),
-    ("POST", "/api/dashboard/test"): ("client", "_post_dashboard_test"),
-    ("POST", "/api/dashboard/refresh"): ("client", "_post_refresh_models"),
-    ("POST", "/api/dashboard/save"): ("client", "_post_save_stats"),
-    ("POST", "/api/dashboard/prices"): ("client", "_post_refresh_prices"),
-    ("POST", "/api/dashboard/reset"): ("local", "_post_reset_stats"),
-    ("POST", "/api/dashboard/key"): ("local", "_post_new_key"),
-    ("POST", "/api/dashboard/stop"): ("local", "_post_stop_server"),
+    ("GET", "/api/dashboard"): ("dashboard", "_get_dashboard_state"),
+    ("GET", "/api/dashboard/stats"): ("dashboard", "_get_dashboard_stats"),
+    ("GET", "/api/dashboard/log"): ("dashboard", "_get_dashboard_log"),
+    ("POST", "/api/dashboard/test"): ("dashboard", "_post_dashboard_test"),
+    ("POST", "/api/dashboard/refresh"): ("dashboard", "_post_refresh_models"),
+    ("POST", "/api/dashboard/save"): ("dashboard", "_post_save_stats"),
+    ("POST", "/api/dashboard/prices"): ("dashboard", "_post_refresh_prices"),
+    ("GET", "/api/dashboard/settings"): ("admin", "_get_settings"),
+    ("POST", "/api/dashboard/settings"): ("admin", "_post_settings"),
+    ("POST", "/api/dashboard/restart"): ("admin", "_post_restart"),
+    ("POST", "/api/dashboard/reset"): ("admin", "_post_reset_stats"),
+    ("POST", "/api/dashboard/key"): ("admin", "_post_new_key"),
+    ("POST", "/api/dashboard/stop"): ("admin", "_post_stop_server"),
 }
 
 INFERENCE_PATHS = frozenset(
@@ -1927,7 +2120,7 @@ INFERENCE_PATHS = frozenset(
 OLLAMA_PATHS = frozenset({"/api/chat", "/api/generate", "/api/show"})
 QUIET_PATHS = frozenset(
     {"/", "/dashboard", "/favicon.ico", "/health", "/api/dashboard", "/api/dashboard/stats",
-     "/api/dashboard/log",
+     "/api/dashboard/log", "/api/dashboard/settings",
      "/assets/fonts/geist.woff2", "/assets/fonts/geist-mono.woff2"}
 )
 CLIENT_GONE = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
@@ -2038,7 +2231,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             "path": self._path,
             "status": status,
             "ms": round((time.time() - self._t0) * 1000),
-            "client": "local" if self._is_loopback() else self.client_address[0],
+            "client": "local" if self._is_loopback() else self._client_ip(),
         }
         model = self._meta.get("model")
         if model:
@@ -2080,7 +2273,12 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         _emit(_paint("[oc-free-api] ", "dim") + line, sys.stderr)
 
 
+    def _via_proxy(self) -> bool:
+        return any(self.headers.get(h) for h in ("X-Forwarded-For", "Forwarded", "X-Real-IP"))
+
     def _is_loopback(self) -> bool:
+        if self._via_proxy():
+            return False
         try:
             ip = ipaddress.ip_address(str(self.client_address[0]).split("%", 1)[0])
         except ValueError:
@@ -2127,10 +2325,14 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             key.encode("utf-8"), self.api_key.encode("utf-8")
         )
 
+    def _client_ip(self) -> str:
+        forwarded = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        return forwarded or str(self.client_address[0])
+
     def _check_access(self, access: str) -> None:
         if access == "open":
             return
-        if access == "local":
+        if access == "admin":
             if not self._trusted():
                 raise ProxyError("only allowed from the server machine itself.", 403)
             return
@@ -2257,9 +2459,8 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _get_favicon(self) -> None:
-        self.send_response(204)
-        self.send_header("Content-Length", "0")
-        self.end_headers()
+        self._path = "/assets/icon.ico"
+        self._get_asset()
 
     def _get_health(self) -> None:
         self._send_json(200, {"ok": True, "version": APP_VERSION})
@@ -2334,6 +2535,46 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     def _get_dashboard_state(self) -> None:
         self._send_json(200, dashboard_state(local=self._trusted()))
+
+    def _get_settings(self) -> None:
+        self._send_json(200, settings_payload())
+
+    def _post_settings(self) -> None:
+        req = self._read_json()
+        with CONFIG_LOCK:
+            if "access" in req:
+                if req["access"] not in ACCESS_HOSTS:
+                    raise ProxyError("access must be local or network.", 400)
+                CONFIG["access"] = req["access"]
+            if "port" in req:
+                try:
+                    port = int(req["port"])
+                except (TypeError, ValueError) as exc:
+                    raise ProxyError("port must be a number.", 400) from exc
+                if not 1 <= port <= 65535:
+                    raise ProxyError("port must be between 1 and 65535.", 400)
+                CONFIG["port"] = port
+            if "open_browser" in req:
+                CONFIG["open_browser"] = bool(req["open_browser"])
+        if "autostart" in req and req["autostart"] is not None:
+            try:
+                set_autostart(bool(req["autostart"]))
+            except OSError as exc:
+                raise ProxyError(f"could not change autostart: {exc}", 500) from exc
+        try:
+            save_config()
+        except OSError as exc:
+            raise ProxyError(f"could not write {CONFIG_FILE.name}: {exc}", 500) from exc
+        self._send_json(200, settings_payload())
+
+    def _post_restart(self) -> None:
+        global RESTART_REQUESTED
+        with CONFIG_LOCK:
+            port = CONFIG["port"]
+        self._send_json(200, {"ok": True, "restarting": True, "port": port})
+        RESTART_REQUESTED = True
+        if SERVER is not None:
+            threading.Thread(target=SERVER.shutdown, daemon=True).start()
 
     def _get_dashboard_stats(self) -> None:
         PRICING.refresh_async()
@@ -2620,34 +2861,100 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         self._end_chunked()
 
 
+def _probe_running(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1.5) as response:
+            data = json.load(response)
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("ok") is True and "version" in data
+
+
+def _bind(host: str, port: int, wait: float) -> ThreadingHTTPServer:
+    deadline = time.time() + wait
+    while True:
+        try:
+            return ThreadingHTTPServer((host, port), OpenAICompatibleHandler)
+        except OSError:
+            if time.time() >= deadline:
+                raise
+            time.sleep(0.3)
+
+
+def _print_window_banner(port: int) -> None:
+    urls = public_urls(port)
+    _emit("")
+    _emit("  oc-free-api is running")
+    _emit("")
+    _emit(f"  Dashboard        {urls['local']}")
+    if urls["network"]:
+        _emit(f"  On your network  {urls['network']}")
+    _emit("")
+    _emit("  This window closes in a few seconds. The server keeps running")
+    _emit("  in the background. Stop it in the dashboard under Settings.")
+    _emit("")
+
+
+def _restart_process() -> None:
+    env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k != "_MEIPASS2"}
+    env["OCFREE_RESTARTED"] = "1"
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    argv = [sys.executable] + (sys.argv[1:] if FROZEN else sys.argv)
+    if os.name == "nt":
+        flags = 0x00000008 | 0x00000200 | 0x08000000
+        subprocess.Popen(argv, env=env, creationflags=flags, close_fds=True)
+    else:
+        os.execve(sys.executable, argv, env)
+
+
 def main() -> None:
-    global SERVER, BOUND_OPEN, BOUND_PORT
+    global SERVER, BOUND_OPEN, BOUND_PORT, BOUND_HOST, CONFIG, METRICS, PRICING, CLI_HOST, CLI_PORT
     parser = argparse.ArgumentParser(
         description="OpenAI-compatible local API for OpenCode Zen free models."
     )
-    parser.add_argument(
-        "--host",
-        default="0.0.0.0",
-        help="bind address (default 0.0.0.0 = local + LAN; 127.0.0.1 = local only)",
-    )
-    parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--host", help="bind address; overrides the dashboard setting")
+    parser.add_argument("--port", type=int, help="port; overrides the dashboard setting")
     parser.add_argument("--key", help="use a specific API key instead of the generated one")
-    parser.add_argument(
-        "--no-save",
-        action="store_true",
-        help="do not load or save usage statistics (stats.json)",
-    )
-    parser.add_argument(
-        "--refresh-models",
-        action="store_true",
-        help="refresh the model list once before starting",
-    )
+    parser.add_argument("--no-save", action="store_true", help="do not load or save usage statistics")
+    parser.add_argument("--refresh-models", action="store_true", help="refresh the model list on start")
+    parser.add_argument("--no-browser", action="store_true", help="do not open the dashboard on start")
+    parser.add_argument("--background", action="store_true", help="start without a window (Windows)")
     args = parser.parse_args()
 
-    if args.key:
-        _write_key(args.key.strip())
+    restarted = os.environ.pop("OCFREE_RESTARTED", "") == "1"
+    windows_app = FROZEN and os.name == "nt"
+    show_window = windows_app and not args.background and not restarted
+    if show_window and not _windows_console_open():
+        show_window = False
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if not show_window and (sys.stdout is None or (os.name == "nt" and (restarted or args.background))):
+        open_log_file()
 
-    global METRICS, PRICING
+    CONFIG = load_config()
+    CLI_HOST, CLI_PORT = args.host, args.port
+    host = args.host or ACCESS_HOSTS[CONFIG["access"]]
+    port = args.port or CONFIG["port"]
+    key = args.key or os.environ.get("OCFREE_API_KEY")
+    if key:
+        _write_key(key.strip())
+    open_browser = (
+        windows_app and bool(CONFIG["open_browser"])
+        and not (args.no_browser or args.background or restarted)
+    )
+    dashboard_url = f"http://localhost:{port}/"
+
+    if not restarted and _probe_running(port):
+        _emit("")
+        _emit("  oc-free-api is already running.")
+        _emit(f"  Dashboard  {dashboard_url}")
+        _emit("")
+        if open_browser:
+            webbrowser.open(dashboard_url)
+        if show_window:
+            time.sleep(4)
+            _windows_console_close()
+        return
+
     api_key = ensure_api_key()
     models = available_models(refresh=args.refresh_models)
     METRICS = Metrics(None if args.no_save else STATS_FILE)
@@ -2657,25 +2964,42 @@ def main() -> None:
     OpenAICompatibleHandler.api_key = api_key
 
     try:
-        server = ThreadingHTTPServer((args.host, args.port), OpenAICompatibleHandler)
+        server = _bind(host, port, wait=15 if restarted else 0)
     except OSError as exc:
-        sys.exit(f"Cannot listen on {args.host}:{args.port}: {exc}")
+        _emit(f"  Cannot listen on {host}:{port}: {exc}")
+        if show_window:
+            _emit("  Another program may use this port. This window closes in 15 seconds.")
+            time.sleep(15)
+            _windows_console_close()
+        sys.exit(1)
     server.daemon_threads = True
     SERVER = server
-    BOUND_OPEN = args.host in ("0.0.0.0", "::")
-    BOUND_PORT = args.port
+    BOUND_OPEN = host in ("0.0.0.0", "::")
+    BOUND_PORT = port
+    BOUND_HOST = host
 
-    _console_init(args.port)
-    _print_banner(args.port, args.host, api_key, models)
-    if restored:
-        tokens = f"{METRICS.tokens_in + METRICS.tokens_out:,}"
-        _emit(
-            "  " + _paint("Stats     ", "cyan")
-            + _paint(f"loaded from {STATS_FILE.name}: {METRICS.requests} requests, {tokens} tokens", "dim")
-        )
-        _emit("")
+    if LOG_STREAM is None:
+        _console_init(port)
+    if show_window:
+        _print_window_banner(port)
+    else:
+        _print_banner(port, host, api_key, models)
+        if restored:
+            tokens = f"{METRICS.tokens_in + METRICS.tokens_out:,}"
+            _emit(
+                "  " + _paint("Stats     ", "cyan")
+                + _paint(f"loaded from {STATS_FILE.name}: {METRICS.requests} requests, {tokens} tokens", "dim")
+            )
+            _emit("")
     if METRICS.path is not None:
         threading.Thread(target=METRICS.autosave_loop, daemon=True).start()
+    if open_browser:
+        threading.Timer(0.3, webbrowser.open, args=(dashboard_url,)).start()
+    if show_window:
+        def detach() -> None:
+            open_log_file()
+            _windows_console_close()
+        threading.Timer(6.0, detach).start()
 
     try:
         server.serve_forever()
@@ -2688,6 +3012,8 @@ def main() -> None:
                 METRICS.save()
             except OSError:
                 pass
+    if RESTART_REQUESTED:
+        _restart_process()
 
 
 if __name__ == "__main__":

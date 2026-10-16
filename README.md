@@ -6,24 +6,24 @@ Local server that exposes OpenCode Zen's free models as an OpenAI- and Ollama-co
 
 From [Releases](https://github.com/7q9k/oc-free-api/releases):
 
-- `oc-free-api.exe`: Windows, no Python needed. Put it in its own folder and run it.
+- `oc-free-api.exe`: Windows, no Python needed. Put it in its own folder and double-click it.
 - `oc-free-api-<version>-python.zip`: any OS with Python 3.10+. Unzip and run `python server.py`.
 
 ## Run
 
-```
-python server.py
-```
+Double-click `oc-free-api.exe`. A small window shows the dashboard address, the browser opens, and the server keeps running in the background. Opening the exe again just opens the dashboard.
 
-Dashboard: http://localhost:8787 · Base URL: `http://localhost:8787/v1` · API key: `api-key.txt` (created on first start).
+Everything else happens in the dashboard (http://localhost:8787): who can connect, port, start with Windows, API key, restart and stop.
 
-Options: `--port`, `--host 127.0.0.1` (local only), `--key`, `--refresh-models`, `--no-save`.
+Base URL for apps: `http://localhost:8787/v1` (also works without `/v1`). The API key is in `api-key.txt`.
+
+Command line options (optional): `--port`, `--host`, `--key`, `--no-browser`, `--background`, `--no-save`.
 
 ## Access
 
-- From the same machine: no key needed.
-- From the LAN: the API key is always required.
-- Key reset, stop and stats reset only work from the server machine.
+- Same computer: no key needed.
+- Your network: the API key is always required.
+- Settings, key reset and stop only work on the computer that runs the server.
 
 ## API
 
@@ -36,13 +36,11 @@ Options: `--port`, `--host 127.0.0.1` (local only), `--key`, `--refresh-models`,
 
 ## Dashboard
 
-Requests, exact input/output tokens, response times, model tests, a chat playground and an activity log. Stats are saved to `stats.json` and survive restarts.
-
-Cost shows what the same tokens would cost on OpenRouter, using live OpenRouter prices. Only models with an exact OpenRouter match get a price.
+Charts for requests and tokens (30 min / 24 h), tokens and cost per model, response times, model tests, a chat playground and an activity log. Stats are saved to `stats.json` and survive restarts. Cost shows what the same tokens would cost on OpenRouter (live prices, exact model matches only).
 
 ## Free limit
 
-OpenCode is not unlimited. Free models are rate-limited per IP; there is no official number (users report about 200 requests/day). When the limit is hit, OpenCode returns HTTP 429 `FreeUsageLimitError`. The dashboard shows your requests in the last 5 h and 24 h.
+OpenCode is not unlimited. Free models are rate-limited per IP; there is no official number (users report about 200 requests/day). When the limit is hit, OpenCode returns HTTP 429 `FreeUsageLimitError`.
 
 ## Tests
 

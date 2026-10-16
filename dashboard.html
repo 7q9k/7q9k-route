@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>oc-free-api</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230b0b0c'/%3E%3Ccircle cx='8' cy='8' r='2.5' fill='%234ade80'/%3E%3C/svg%3E">
+<link rel="icon" href="/assets/icon.png" type="image/png">
 <script>try{ const t=localStorage.getItem('ocfree.theme'); if(t) document.documentElement.dataset.theme=t; }catch{}</script>
 <style>
   @font-face{ font-family:'Geist'; src:url('/assets/fonts/geist.woff2') format('woff2'); font-weight:100 900; font-display:swap; }
@@ -24,6 +24,7 @@
     --text:#ededee; --text-2:#b7b8bd; --muted:#75767c; --bad:#f87171; --signal:#4ade80;
     color-scheme:dark;
   }
+  :root{ --c-in:color-mix(in srgb,var(--text) 34%,var(--bg)); --c-out:color-mix(in srgb,var(--text) 78%,var(--bg)); }
   :root{ --primary:var(--text); --primary-ink:var(--bg); --focus-glow:0 0 0 4px color-mix(in srgb,var(--text) 6%,transparent); }
 
   *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -46,7 +47,7 @@
   .text-btn:hover{ color:var(--text); }
   .text-btn:disabled{ opacity:.5; cursor:progress; }
 
-  .col{ width:min(var(--col),100% - 32px); margin:0 auto; padding:clamp(24px,7vh,72px) 0 80px; }
+  .col{ width:min(var(--col),100% - 32px); margin:0 auto; padding:clamp(24px,7vh,72px) 0 80px; overflow-x:clip; }
   .section{ margin-top:var(--gap-section); }
   .section-head{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; padding-bottom:10px; border-bottom:1px solid var(--line); }
   .section-head h2{ margin:0; font-size:13px; font-weight:500; color:var(--muted); letter-spacing:0; }
@@ -66,12 +67,27 @@
   .chart svg{ display:block; width:100%; height:100%; overflow:visible; }
   .chart .axis{ fill:var(--muted); font:10.5px var(--mono); }
   .chart .base{ stroke:var(--line); }
-  .chart rect.b{ fill:var(--text-2); opacity:.55; }
+  .chart rect.s0{ fill:var(--c-in); }
+  .chart rect.s1{ fill:var(--c-out); }
   .chart rect.e{ fill:var(--bad); }
-  .chart g.col:hover rect.b{ opacity:.9; }
+  .chart g.col:hover rect{ filter:brightness(1.25); }
+  .chart .grid{ stroke:var(--line); stroke-dasharray:2 3; }
   .chart .empty-note{ position:absolute; inset:0 0 18px; display:grid; place-items:center; color:var(--muted); font-size:13px; }
-  .tip{ position:absolute; pointer-events:none; padding:6px 10px; border-radius:8px; background:var(--primary); color:var(--primary-ink); font-size:12.5px; white-space:nowrap; transform:translate(-50%,calc(-100% - 8px)); opacity:0; transition:opacity .12s; z-index:3; }
+  .tip{ position:absolute; left:0; pointer-events:none; padding:6px 10px; border-radius:8px; background:var(--primary); color:var(--primary-ink); font-size:12.5px; white-space:nowrap; transform:translate(-50%,calc(-100% - 8px)); opacity:0; transition:opacity .12s; z-index:3; }
   .chart-cap{ display:flex; justify-content:space-between; margin-top:6px; font-size:12.5px; color:var(--muted); }
+  .chart-head{ display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-top:36px; }
+  .chart-head .ctl{ display:flex; gap:8px; flex-wrap:wrap; }
+  .legend{ display:flex; gap:16px; font-size:12.5px; color:var(--muted); }
+  .legend span{ display:inline-flex; align-items:center; gap:6px; }
+  .legend i{ width:10px; height:10px; border-radius:3px; background:var(--c); }
+  .hbars{ margin:16px 0 0; padding:0; list-style:none; }
+  .hbars li{ display:grid; grid-template-columns:minmax(120px,240px) minmax(0,1fr) 96px; gap:14px; align-items:center; padding:7px 0; }
+  .hbars .n{ font:13px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .hbars .track{ display:flex; gap:2px; height:12px; }
+  .hbars .track b{ display:block; height:100%; border-radius:3px; min-width:3px; background:var(--c); transition:width .4s var(--ease); }
+  .hbars .val{ font:12.5px var(--mono); color:var(--text-2); text-align:right; white-space:nowrap; }
+  .hbars .none{ font-size:13.5px; color:var(--muted); padding:12px 0; grid-template-columns:1fr; }
+  .chart-pair{ display:grid; gap:36px; margin-top:8px; }
 
   .rows{ margin:0; padding:0; list-style:none; }
   .rows li{ display:grid; grid-template-columns:150px minmax(0,1fr) auto; gap:16px; align-items:center; padding:12px 0; border-bottom:1px solid var(--line); }
@@ -180,133 +196,284 @@
     .section-head .tools > *{ white-space:nowrap; }
     #modelSource{ display:none; }
   }
+  .top{ position:sticky; top:0; z-index:20; background:color-mix(in srgb,var(--bg) 92%,transparent); backdrop-filter:blur(8px); border-bottom:1px solid var(--line); }
+  .nav{ display:flex; gap:2px; overflow-x:auto; scrollbar-width:none; }
+  .nav::-webkit-scrollbar{ display:none; }
+  .nav a{ padding:6px 11px; border-radius:8px; font-size:14px; color:var(--muted); text-decoration:none; white-space:nowrap; transition:color .2s, background .2s; }
+  .nav a:hover{ color:var(--text); }
+  .nav a.on{ color:var(--text); background:var(--line); font-weight:550; }
+  .page > .section:first-of-type{ margin-top:40px; }
+  a.link{ color:var(--text); text-underline-offset:3px; }
+  .notice{ display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-top:28px; padding:14px 16px; border:1px solid var(--line-2); border-radius:var(--r-field); font-size:14px; }
+  .notice.warn{ border-color:color-mix(in srgb,var(--bad) 55%,transparent); }
+  .notice b{ font-weight:600; }
+  .steps{ margin:0; padding:0; list-style:none; counter-reset:step; }
+  .steps li{ display:grid; grid-template-columns:28px minmax(0,1fr) auto; gap:14px; align-items:center; padding:14px 0; border-bottom:1px solid var(--line); counter-increment:step; }
+  .steps li::before{ content:counter(step); width:24px; height:24px; display:grid; place-items:center; border:1px solid var(--line-2); border-radius:50%; font:12px var(--mono); color:var(--muted); }
+  .steps .k{ font-size:13px; color:var(--muted); }
+  .steps .v{ font:14px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .limits{ display:flex; flex-wrap:wrap; gap:6px 28px; padding:14px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .limits span{ color:var(--muted); }
+  .limits b{ font-weight:550; font-variant-numeric:tabular-nums; }
+  .choices{ display:grid; gap:8px; margin-top:16px; }
+  .choice{ display:grid; grid-template-columns:20px minmax(0,1fr); gap:12px; align-items:start; padding:14px 16px; text-align:left; border:1px solid var(--line-2); border-radius:var(--r-field); background:transparent; transition:border-color .2s; }
+  .choice:hover{ border-color:var(--text); }
+  .choice i{ width:16px; height:16px; margin-top:2px; border:1.5px solid var(--line-2); border-radius:50%; }
+  .choice[aria-checked=true]{ border-color:var(--signal); }
+  .choice[aria-checked=true] i{ border:5px solid var(--signal); }
+  .choice b{ display:block; font-size:14.5px; font-weight:600; }
+  .choice span{ display:block; margin-top:2px; font-size:13px; color:var(--muted); }
+  .form{ margin:0; padding:0; list-style:none; }
+  .form li{ display:grid; grid-template-columns:200px minmax(0,1fr); gap:16px; align-items:center; padding:14px 0; border-bottom:1px solid var(--line); }
+  .form .k b{ display:block; font-size:14px; font-weight:550; }
+  .form .k span{ display:block; font-size:12.5px; color:var(--muted); }
+  .input{ width:100%; max-width:320px; height:38px; padding:0 12px; border:1px solid var(--line-2); border-radius:10px; background:var(--field); font:14px var(--mono); outline:0; }
+  .input:focus{ border-color:var(--text); box-shadow:var(--focus-glow); }
+  .switch{ position:relative; width:42px; height:24px; border:0; border-radius:var(--r-pill); background:var(--line-2); transition:background .2s; }
+  .switch::after{ content:""; position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:var(--bg); transition:transform .2s var(--ease); }
+  .switch[aria-checked=true]{ background:var(--signal); }
+  .switch[aria-checked=true]::after{ transform:translateX(18px); }
+  .save-bar{ display:flex; justify-content:flex-end; gap:8px; margin-top:20px; }
+  .tabs2{ display:flex; gap:4px; margin-top:24px; }
+  .stopped{ text-align:center; padding-top:12vh; }
+  @media (max-width:760px){
+    .hbars li{ grid-template-columns:minmax(0,1fr) 84px; gap:4px 12px; }
+    .hbars .n{ grid-column:1 / -1; }
+    .top{ height:auto; flex-wrap:wrap; padding-top:12px; padding-bottom:8px; row-gap:6px; }
+    .nav{ order:3; width:100%; margin:0 -11px; }
+    .form li{ grid-template-columns:minmax(0,1fr); gap:8px; }
+    .steps li{ grid-template-columns:28px minmax(0,1fr); }
+    .steps li .a{ grid-column:2; }
+  }
 </style>
 </head>
 <body>
 <header class="top">
   <div class="brand">oc-free-api<span>.</span></div>
+  <nav class="nav" id="nav" hidden>
+    <a href="#/overview" data-page="overview">Overview</a>
+    <a href="#/connect" data-page="connect">Connect</a>
+    <a href="#/models" data-page="models">Models</a>
+    <a href="#/usage" data-page="usage">Usage</a>
+    <a href="#/activity" data-page="activity">Activity</a>
+    <a href="#/settings" data-page="settings">Settings</a>
+  </nav>
   <div class="top-right">
     <span class="uptime num" id="uptime"></span>
     <span class="state" id="state"><b>Connecting</b></span>
+    <button class="text-btn" id="logout" hidden>Log out</button>
     <button class="text-btn" id="theme" aria-label="Light or dark">Light</button>
   </div>
 </header>
 
 <main class="col">
   <section class="gate" id="gate" hidden>
-    <h1 class="title">Enter API key</h1>
-    <p class="lead">You are connecting over the network. The key is in <span class="mono">api-key.txt</span> on the server machine.</p>
+    <h1 class="title">Log in</h1>
+    <p class="lead">You are connecting from another device. Enter the API key to open the dashboard.</p>
     <form id="gateForm" class="field">
-      <input id="gateKey" placeholder="sk-oc-free-…" autocomplete="off" spellcheck="false" aria-label="API key">
-      <button class="btn primary" type="submit">Connect</button>
+      <input id="gateInput" placeholder="sk-oc-free-…" autocomplete="off" spellcheck="false" aria-label="API key">
+      <button class="btn primary" type="submit">Log in</button>
     </form>
-    <p class="hint" id="gateHint" aria-live="polite"></p>
+    <p class="hint" id="gateHint" aria-live="polite">The API key is in api-key.txt next to the server.</p>
+  </section>
+
+  <section class="stopped" id="stopped" hidden>
+    <h1 class="title">Server stopped</h1>
+    <p class="lead" id="stoppedText">Start oc-free-api again to use the dashboard.</p>
   </section>
 
   <div id="app" hidden>
-    <h1 class="title">Overview</h1>
-    <p class="lead">OpenCode's free models behind an OpenAI- and Ollama-compatible API.</p>
+    <div class="page" data-page="overview">
+      <h1 class="title">Overview</h1>
+      <p class="lead">OpenCode's free models behind an OpenAI- and Ollama-compatible API.</p>
+      <div class="notice warn" id="restartNotice" hidden><span><b>Restart needed.</b> Some settings apply after a restart.</span><button class="btn" data-restart>Restart now</button></div>
 
-    <div class="stats">
-      <div class="stat"><div class="l">Requests</div><div class="v" id="kReq">0</div><div class="h" id="kReqHint">&nbsp;</div></div>
-      <div class="stat"><div class="l">Tokens</div><div class="v" id="kTok">0</div><div class="h" id="kTokHint">&nbsp;</div></div>
-      <div class="stat"><div class="l">OpenRouter value</div><div class="v" id="kCost">–</div><div class="h" id="kCostHint">&nbsp;</div></div>
-      <div class="stat"><div class="l">Avg. response time</div><div class="v" id="kLat">–</div><div class="h" id="kLatHint">&nbsp;</div></div>
+      <section class="section" id="getStarted" hidden>
+        <div class="section-head"><h2>Get started</h2><a class="text-btn" href="#/connect">More setups</a></div>
+        <ul class="steps">
+          <li><div><div class="k">Base URL in your app</div><div class="v" id="gsUrl">–</div></div><span class="a"><button class="text-btn" data-copy-text="gsUrl">Copy</button></span></li>
+          <li><div><div class="k">API key</div><div class="v" id="gsKey">–</div></div><span class="a"><button class="text-btn" data-copy-key>Copy</button></span></li>
+          <li><div><div class="k">Model</div><div class="v" id="gsModel">big-pickle</div></div><span class="a"><a class="text-btn" href="#/models">Try it</a></span></li>
+        </ul>
+        <p class="hint">Protocol: OpenAI Chat Completions or OpenAI Responses. Both work.</p>
+      </section>
+
+      <div class="stats">
+        <div class="stat"><div class="l">Requests</div><div class="v" id="kReq">0</div><div class="h" id="kReqHint">&nbsp;</div></div>
+        <div class="stat"><div class="l">Tokens</div><div class="v" id="kTok">0</div><div class="h" id="kTokHint">&nbsp;</div></div>
+        <div class="stat"><div class="l">OpenRouter value</div><div class="v" id="kCost">–</div><div class="h" id="kCostHint">&nbsp;</div></div>
+        <div class="stat"><div class="l">Avg. response time</div><div class="v" id="kLat">–</div><div class="h" id="kLatHint">&nbsp;</div></div>
+      </div>
+      <div class="chart-head">
+        <div class="legend" id="legend"></div>
+        <div class="ctl">
+          <div class="mode" role="radiogroup" aria-label="Metric" id="chartMetric">
+            <button role="radio" data-v="requests" aria-checked="true">Requests</button>
+            <button role="radio" data-v="tokens" aria-checked="false">Tokens</button>
+          </div>
+          <div class="mode" role="radiogroup" aria-label="Range" id="chartRange">
+            <button role="radio" data-v="30m" aria-checked="true">30 min</button>
+            <button role="radio" data-v="24h" aria-checked="false">24 h</button>
+          </div>
+        </div>
+      </div>
+      <div class="chart" id="chart" role="img" aria-label="Activity chart"><div class="tip" id="tip"></div></div>
+      <div class="chart-cap"><span id="chartCap">Requests per minute · last 30 minutes</span><span id="chartErr"></span></div>
+
+      <section class="section">
+        <div class="section-head"><h2>Free limit</h2><span class="tools"><span class="text-btn" id="limitState" style="cursor:default"></span></span></div>
+        <div class="limits"><div><span>Last 5 h</span> <b id="lim5">–</b></div><div><span>Last 24 h</span> <b id="lim24">–</b></div><div><span>Limit hit</span> <b id="limHit">–</b></div></div>
+        <p class="hint">OpenCode publishes no fixed number; users report about 200 requests per day per IP. When it is hit, OpenCode answers HTTP 429 and you have to wait.</p>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2>Recent activity</h2><a class="text-btn" href="#/activity">All activity</a></div>
+        <ul class="list log" id="recent"></ul>
+      </section>
     </div>
-    <div class="chart" id="chart" role="img" aria-label="Requests per minute, last 30 minutes"><div class="tip" id="tip"></div></div>
-    <div class="chart-cap"><span>Requests per minute · last 30 minutes</span><span id="chartErr"></span></div>
 
-    <section class="section">
-      <div class="section-head">
-        <h2>Usage and cost</h2>
-        <span class="tools"><span class="text-btn" id="saveState" style="cursor:default"></span><button class="text-btn" id="btnSave">Save now</button><button class="text-btn" id="btnReset" hidden>Reset</button></span>
-      </div>
-      <div class="usage-scroll">
-        <table class="usage">
-          <thead><tr><th>Model</th><th class="r">Requests</th><th class="r">Input</th><th class="r">Output</th><th class="r">Cost</th></tr></thead>
-          <tbody id="usage"></tbody>
-          <tfoot id="usageTotal"></tfoot>
-        </table>
-      </div>
-      <p class="hint" id="priceNote"></p>
-    </section>
-
-    <section class="section">
-      <div class="section-head"><h2>Free limit</h2><span class="tools"><span class="text-btn" id="limitState" style="cursor:default"></span></span></div>
-      <ul class="rows">
-        <li><span class="k">Last 5 hours</span><span class="v num" id="lim5">–</span><span class="a"></span></li>
-        <li><span class="k">Last 24 hours</span><span class="v num" id="lim24">–</span><span class="a"></span></li>
-        <li><span class="k">Limit hit</span><span class="v" id="limHit">–</span><span class="a"></span></li>
-      </ul>
-      <p class="hint">OpenCode publishes no fixed number. Free models are limited per IP and only free for a limited time; users report about 200 requests per day. When the limit is hit, OpenCode answers HTTP 429 <span class="mono">FreeUsageLimitError</span> and you have to wait.</p>
-    </section>
-
-    <section class="section">
-      <div class="section-head"><h2>Connection</h2></div>
-      <ul class="rows">
-        <li><span class="k">OpenAI base URL</span><span class="v" id="urlOpenai">–</span><span class="a"><button class="text-btn" data-copy="urlOpenai">Copy</button></span></li>
-        <li><span class="k">Ollama URL</span><span class="v" id="urlOllama">–</span><span class="a"><button class="text-btn" data-copy="urlOllama">Copy</button></span></li>
-        <li id="rowLan" hidden><span class="k">On your network</span><span class="v" id="urlLan">–</span><span class="a"><button class="text-btn" data-copy="urlLan">Copy</button></span></li>
-        <li><span class="k">API key</span><span class="v" id="apiKey">–</span><span class="a"><button class="text-btn" id="btnReveal">Show</button><button class="text-btn" id="btnCopyKey">Copy</button></span></li>
-      </ul>
-      <p class="hint" id="accessNote"></p>
-
-      <div class="code-head">
-        <div class="mode" role="radiogroup" aria-label="Example" id="tabs">
-          <button role="radio" data-tab="python" aria-checked="true">Python</button>
+    <div class="page" data-page="connect" hidden>
+      <h1 class="title">Connect</h1>
+      <p class="lead">Use these values in any app that supports an OpenAI-compatible API.</p>
+      <section class="section">
+        <div class="section-head"><h2>Addresses</h2></div>
+        <ul class="rows">
+          <li><span class="k">OpenAI base URL</span><span class="v" id="urlOpenai">–</span><span class="a"><button class="text-btn" data-copy-text="urlOpenai">Copy</button></span></li>
+          <li id="rowLan" hidden><span class="k">On your network</span><span class="v" id="urlLan">–</span><span class="a"><button class="text-btn" data-copy-text="urlLan">Copy</button></span></li>
+          <li><span class="k">Ollama URL</span><span class="v" id="urlOllama">–</span><span class="a"><button class="text-btn" data-copy-text="urlOllama">Copy</button></span></li>
+          <li><span class="k">API key</span><span class="v" id="apiKey">–</span><span class="a"><button class="text-btn" id="btnReveal">Show</button><button class="text-btn" data-copy-key>Copy</button></span></li>
+        </ul>
+        <p class="hint" id="accessNote"></p>
+      </section>
+      <section class="section">
+        <div class="section-head"><h2>Examples</h2><button class="text-btn" id="btnSnip">Copy</button></div>
+        <div class="code-head"><div class="mode" role="radiogroup" aria-label="Example" id="tabs">
+          <button role="radio" data-tab="app" aria-checked="true">App settings</button>
+          <button role="radio" data-tab="python" aria-checked="false">Python</button>
           <button role="radio" data-tab="curl" aria-checked="false">curl</button>
           <button role="radio" data-tab="opencode" aria-checked="false">OpenCode</button>
           <button role="radio" data-tab="ollama" aria-checked="false">Ollama</button>
+        </div></div>
+        <pre class="code" id="snip"></pre>
+      </section>
+    </div>
+
+    <div class="page" data-page="models" hidden>
+      <h1 class="title">Models</h1>
+      <p class="lead">Send a message to try a model, or test them all.</p>
+      <section class="section">
+        <div class="section-head"><h2>Try it</h2></div>
+        <div class="compose">
+          <textarea id="pgPrompt" placeholder="Message to the model" aria-label="Message">Explain in two sentences what a reverse proxy is.</textarea>
+          <div class="compose-bar">
+            <select class="select" id="pgModel" aria-label="Model"></select>
+            <span class="actions"><button class="btn" id="pgStop" hidden>Cancel</button><button class="btn primary" id="pgSend">Send</button></span>
+          </div>
         </div>
-        <button class="text-btn" id="btnSnip">Copy example</button>
-      </div>
-      <pre class="code" id="snip"></pre>
-    </section>
-
-    <section class="section">
-      <div class="section-head"><h2>Try it</h2></div>
-      <div class="compose">
-        <textarea id="pgPrompt" placeholder="Message to the model" aria-label="Message">Explain in two sentences what a reverse proxy is.</textarea>
-        <div class="compose-bar">
-          <select class="select" id="pgModel" aria-label="Model"></select>
-          <span class="actions"><button class="btn" id="pgStop" hidden>Cancel</button><button class="btn primary" id="pgSend">Send</button></span>
+        <p class="hint">Ctrl + Enter sends. Free models may use your input for training, so do not send secrets.</p>
+        <div class="answer" id="pgOut" hidden aria-live="polite"></div>
+      </section>
+      <section class="section">
+        <div class="section-head">
+          <h2>Available <span class="num" id="modelCount"></span></h2>
+          <span class="tools"><span class="text-btn" id="modelSource" style="cursor:default"></span><button class="text-btn" id="btnRefresh">Refresh list</button><button class="text-btn" id="btnTestAll">Test all</button></span>
         </div>
-      </div>
-      <p class="hint">Ctrl + Enter sends. Free models may use your input for training, so do not send secrets.</p>
-      <div class="answer" id="pgOut" hidden aria-live="polite"></div>
-    </section>
+        <ul class="list" id="models"></ul>
+      </section>
+      <section class="section">
+        <div class="section-head"><h2>Average response time</h2></div>
+        <ul class="hbars" id="latChart"></ul>
+      </section>
+    </div>
 
-    <section class="section">
-      <div class="section-head">
-        <h2>Models <span class="num" id="modelCount"></span></h2>
-        <span class="tools"><span class="text-btn" id="modelSource" style="cursor:default"></span><button class="text-btn" id="btnRefresh">Refresh list</button><button class="text-btn" id="btnTestAll">Test all</button></span>
-      </div>
-      <ul class="list" id="models"></ul>
-    </section>
-
-    <section class="section">
-      <div class="section-head">
-        <h2>Activity</h2>
-        <div class="mode" role="radiogroup" aria-label="Filter" id="logFilter">
-          <button role="radio" data-f="all" aria-checked="true">All</button>
-          <button role="radio" data-f="err" aria-checked="false">Errors</button>
+    <div class="page" data-page="usage" hidden>
+      <h1 class="title">Usage</h1>
+      <p class="lead">Tokens per model and what they would have cost on OpenRouter.</p>
+      <section class="section">
+        <div class="section-head">
+          <h2>Usage and cost</h2>
+          <span class="tools"><span class="text-btn" id="saveState" style="cursor:default"></span><button class="text-btn" id="btnSave">Save now</button><button class="text-btn" id="btnReset" hidden>Reset</button></span>
         </div>
-      </div>
-      <div class="scroll"><ul class="list log" id="log"></ul></div>
-    </section>
+        <div class="chart-pair">
+          <div><div class="legend" style="margin-top:16px"><span style="--c:var(--c-in)"><i></i>Input tokens</span><span style="--c:var(--c-out)"><i></i>Output tokens</span></div><ul class="hbars" id="tokChart"></ul></div>
+          <div><div class="legend" style="margin-top:4px"><span>Value on OpenRouter</span></div><ul class="hbars" id="costChart"></ul></div>
+        </div>
+      </section>
+      <section class="section">
+        <div class="section-head"><h2>Details</h2></div>
+        <div class="usage-scroll">
+          <table class="usage">
+            <thead><tr><th>Model</th><th class="r">Requests</th><th class="r">Input</th><th class="r">Output</th><th class="r">Cost</th></tr></thead>
+            <tbody id="usage"></tbody>
+            <tfoot id="usageTotal"></tfoot>
+          </table>
+        </div>
+        <p class="hint" id="priceNote"></p>
+      </section>
+    </div>
 
-    <footer class="foot">
-      <span>Personal use only. Do not share access with others.</span>
-      <span class="actions" id="localActions" hidden>
-        <button class="btn" id="btnKey">New API key</button>
-        <button class="btn danger" id="btnStop">Stop server</button>
-      </span>
-    </footer>
+    <div class="page" data-page="activity" hidden>
+      <h1 class="title">Activity</h1>
+      <p class="lead">The last 200 requests.</p>
+      <section class="section">
+        <div class="section-head">
+          <h2>Requests</h2>
+          <div class="mode" role="radiogroup" aria-label="Filter" id="logFilter">
+            <button role="radio" data-f="all" aria-checked="true">All</button>
+            <button role="radio" data-f="err" aria-checked="false">Errors</button>
+          </div>
+        </div>
+        <ul class="list log" id="log"></ul>
+      </section>
+    </div>
+
+    <div class="page" data-page="settings" hidden>
+      <h1 class="title">Settings</h1>
+      <p class="lead" id="settingsLead">Changes are saved to config.json next to the server.</p>
+      <div id="settingsLocked" hidden><p class="hint">Settings can only be changed on the computer that runs the server.</p></div>
+      <div id="settingsForm">
+        <div class="notice warn" data-restart-notice hidden><span><b>Restart needed</b> to apply the new access or port.</span><button class="btn" data-restart>Restart now</button></div>
+        <div class="notice" id="overrideNotice" hidden><span>The server was started with <span class="mono">--host</span> or <span class="mono">--port</span>. Those win over the access and port settings here.</span></div>
+        <section class="section">
+          <div class="section-head"><h2>Who can connect</h2></div>
+          <div class="choices" role="radiogroup" aria-label="Access" id="access">
+            <button class="choice" role="radio" data-v="local" aria-checked="false"><i></i><div><b>Only this computer</b><span>Apps on this machine only. Nothing on the network can connect.</span></div></button>
+            <button class="choice" role="radio" data-v="network" aria-checked="false"><i></i><div><b>This computer and my network</b><span>Other devices at home or in the office can connect with the API key.</span></div></button>
+          </div>
+        </section>
+        <section class="section">
+          <div class="section-head"><h2>Server</h2></div>
+          <ul class="form">
+            <li><div class="k"><b>Port</b><span>Default 8787</span></div><div><input class="input" id="setPort" inputmode="numeric" aria-label="Port"></div></li>
+            <li><div class="k"><b>Open dashboard on start</b><span>Opens your browser when the app starts</span></div><div><button class="switch" role="switch" id="setBrowser" aria-checked="false" aria-label="Open dashboard on start"></button></div></li>
+            <li id="rowAutostart" hidden><div class="k"><b>Start with Windows</b><span>Runs in the background after login</span></div><div><button class="switch" role="switch" id="setAutostart" aria-checked="false" aria-label="Start with Windows"></button></div></li>
+            <li><div class="k"><b>Data folder</b><span>Key, stats, settings and log</span></div><div class="mono" id="dataDir" style="font-size:13px; overflow-wrap:anywhere">–</div></li>
+          </ul>
+          <div class="save-bar"><button class="btn primary" id="btnSaveSettings">Save settings</button></div>
+        </section>
+        <section class="section">
+          <div class="section-head"><h2>API key</h2></div>
+          <ul class="rows">
+            <li><span class="k">Current key</span><span class="v" id="apiKey2">–</span><span class="a"><button class="text-btn" data-copy-key>Copy</button></span></li>
+          </ul>
+          <p class="hint">A new key logs out every app that uses the old one.</p>
+          <div class="save-bar"><button class="btn" id="btnKey">New API key</button></div>
+        </section>
+        <section class="section">
+          <div class="section-head"><h2>Server control</h2></div>
+          <p class="hint">Stopping ends the server. On Windows, start it again by opening oc-free-api.exe.</p>
+          <div class="save-bar"><button class="btn" data-restart>Restart</button><button class="btn danger" id="btnStop">Stop server</button></div>
+        </section>
+      </div>
+    </div>
+
+    <footer class="foot"><span>Personal use only. Do not share access with others.</span><span id="version"></span></footer>
   </div>
 </main>
 
 <script>
 const $ = id => document.getElementById(id);
+const $$ = sel => [...document.querySelectorAll(sel)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = n => n == null ? '–' : n.toLocaleString('en-US');
 const fmtInt = n => n == null ? '–' : Math.round(n).toLocaleString('en-US');
@@ -318,16 +485,17 @@ const fmtUsd = v => {
 };
 const fmtPerM = v => v == null ? '–' : '$' + v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:4});
 const fmtClock = t => t ? new Date(t*1000).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : '';
-const fmtDate = t => t ? new Date(t*1000).toLocaleString('en-US',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+const fmtDate = t => t ? new Date(t*1000).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
 const fmtMs = ms => ms == null ? '–' : ms >= 1000 ? (ms/1000).toLocaleString('en-US',{maximumFractionDigits:1})+' s' : ms+' ms';
 const fmtDur = s => { const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60); return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : m ? `${m}m` : `${s}s`; };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function applyThemeLabel(){ $('theme').textContent = document.documentElement.dataset.theme === 'dark' ? 'Light' : 'Dark'; }
 $('theme').onclick = () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; try{ localStorage.setItem('ocfree.theme', t) }catch{} applyThemeLabel(); };
 applyThemeLabel();
 
 let toastTimer;
-function toast(msg){ document.querySelector('.toast')?.remove(); const t=document.createElement('div'); t.className='toast'; t.setAttribute('role','status'); t.textContent=msg; document.body.append(t); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.remove(),2200); }
+function toast(msg){ document.querySelector('.toast')?.remove(); const t=document.createElement('div'); t.className='toast'; t.setAttribute('role','status'); t.textContent=msg; document.body.append(t); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.remove(),2400); }
 
 function armed(btn, label, fn){
   btn.onclick = async () => {
@@ -356,40 +524,62 @@ async function api(path, body){
 }
 async function busy(btn, fn){ btn.disabled=true; try{ await fn(); }catch(e){ if (e instanceof AuthError) showGate(e.message); else toast(e.message); } finally{ btn.disabled=false; } }
 
-let state=null, stats=null, revealed=false, tab='python', logFilter='all';
+let state=null, stats=null, settings=null, revealed=false, tab='app', logFilter='all', stopped=false;
+
+const PAGES = ['overview','connect','models','usage','activity','settings'];
+function route(){
+  const page = PAGES.includes(location.hash.slice(2)) ? location.hash.slice(2) : 'overview';
+  $$('.page').forEach(p => p.hidden = p.dataset.page !== page);
+  $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.page === page));
+  if (page === 'settings') loadSettings();
+  if (page === 'overview' || page === 'usage') renderChart();
+  window.scrollTo(0, 0);
+}
+addEventListener('hashchange', route);
 
 function setState(ok){
+  if (stopped) return;
   const s=$('state'); s.classList.toggle('down', !ok);
-  s.innerHTML = ok ? `<b>Running</b>${state && !state.local ? ' · via network' : ''}` : '<b>Unreachable</b>';
+  s.innerHTML = ok ? `<b>Running</b>${state && !state.local ? ' · remote' : ''}` : '<b>Unreachable</b>';
 }
 const keyText = () => state?.local ? state.api_key : remoteKey;
+const maskKey = k => k ? k.slice(0,11)+'•'.repeat(12)+k.slice(-4) : '–';
+const baseUrl = () => location.origin + '/v1';
 
 function renderAccess(){
-  const o=location.origin;
-  $('urlOpenai').textContent = o+'/v1';
-  $('urlOllama').textContent = o;
-  const lan = state.lan_ip && state.lan_ip !== '127.0.0.1' ? `http://${state.lan_ip}:${state.port}/v1` : null;
-  $('rowLan').hidden = !lan; if (lan) $('urlLan').textContent = lan;
+  const urls = state.urls || {};
+  $('urlOpenai').textContent = baseUrl();
+  $('urlOllama').textContent = location.origin;
+  const lan = urls.network ? urls.network + '/v1' : null;
+  $('rowLan').hidden = !lan || location.origin === urls.network;
+  if (lan) $('urlLan').textContent = lan;
   const k = keyText() || '';
-  $('apiKey').textContent = revealed ? k : (k ? k.slice(0,11)+'•'.repeat(16)+k.slice(-4) : '–');
+  $('apiKey').textContent = revealed ? k : maskKey(k);
+  $('apiKey2').textContent = revealed ? k : maskKey(k);
   $('btnReveal').textContent = revealed ? 'Hide' : 'Show';
-  $('localActions').hidden = !state.local;
+  $('gsUrl').textContent = baseUrl();
+  $('gsKey').textContent = maskKey(k);
+  $('gsModel').textContent = state.default_model;
   $('accessNote').textContent = !state.local
-    ? 'Connected over the network. Every request needs the API key.'
-    : state.lan_ip ? 'No key needed on this machine. Other devices on the network need it.'
-    : 'The server is only reachable from this machine.';
+    ? 'You are connected from another device. Every request needs the API key.'
+    : lan ? 'Apps on this computer work without a key. Other devices on your network need it.'
+    : 'Only apps on this computer can connect. Change this under Settings.';
+  $('logout').hidden = state.local || !remoteKey;
+  $('version').textContent = 'v' + state.version;
+  $('nav').hidden = false;
   renderSnippet();
 }
 
 function renderSnippet(){
   if (!state) return;
   const base=location.origin, k=keyText()||'', m=state.default_model;
-  const shown = revealed && k ? k : '<API key from api-key.txt>';
+  const shown = revealed && k ? k : '<API key>';
   const s = {
-    python:`from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${base}/v1",\n    api_key="${shown}",\n)\nresp = client.chat.completions.create(\n    model="${m}",\n    messages=[{"role": "user", "content": "Hello"}],\n)\nprint(resp.choices[0].message.content)`,
+    app:`Provider / type   OpenAI compatible\nBase URL          ${base}/v1\nAPI key           ${shown}\nModel             ${m}\nProtocol          Chat Completions or Responses (both work)`,
+    python:`from openai import OpenAI\n\nclient = OpenAI(base_url="${base}/v1", api_key="${shown}")\nresp = client.chat.completions.create(\n    model="${m}",\n    messages=[{"role": "user", "content": "Hello"}],\n)\nprint(resp.choices[0].message.content)`,
     curl:`curl ${base}/v1/chat/completions \\\n  -H "Authorization: Bearer ${shown}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${m}","messages":[{"role":"user","content":"Hello"}]}'`,
-    opencode:`{\n  "$schema": "https://opencode.ai/config.json",\n  "provider": {\n    "oc-free": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "OpenCode Free (local proxy)",\n      "options": {\n        "baseURL": "${base}/v1",\n        "apiKey": "${shown}"\n      },\n      "models": { "${m}": { "name": "${m}" } }\n    }\n  }\n}`,
-    ollama:`# Ollama clients (Open WebUI, Continue …): base URL without /v1\nOLLAMA_HOST=${base}\n\ncurl ${base}/api/chat -d '{\n  "model": "${m}",\n  "messages": [{"role": "user", "content": "Hello"}]\n}'`,
+    opencode:`{\n  "provider": {\n    "oc-free": {\n      "npm": "@ai-sdk/openai-compatible",\n      "options": { "baseURL": "${base}/v1", "apiKey": "${shown}" },\n      "models": { "${m}": {} }\n    }\n  }\n}`,
+    ollama:`Ollama clients (Open WebUI, Continue …) use the base URL without /v1:\n\n${base}`,
   };
   $('snip').textContent = s[tab];
   $('snip').dataset.copy = k ? s[tab].replaceAll(shown, k) : s[tab];
@@ -406,16 +596,16 @@ function renderModels(){
     sel.value = ids.includes(cur) ? cur : ids[0];
   }
   for (const li of ul.children){
-    const api = state.models.find(m=>m.id===li.dataset.m)?.api === 'responses' ? 'Responses API' : 'Chat API';
+    const kind = state.models.find(m=>m.id===li.dataset.m)?.api === 'responses' ? 'Responses API' : 'Chat API';
     const s = per[li.dataset.m];
-    li.querySelector('[data-f=sub]').innerHTML = `<span>${api}</span>` + (s
+    li.querySelector('[data-f=sub]').innerHTML = `<span>${kind}</span>` + (s
       ? `<span>${fmtInt(s.requests)} requests</span>${s.errors?`<span class="bad">${fmtInt(s.errors)} errors</span>`:''}<span>avg ${fmtMs(s.avg_ms)}</span>`
       : '<span>not used yet</span>');
   }
   $('modelCount').textContent = '· '+ids.length;
   const src = state.model_list||{};
   const label = {live:'Fetched live', cache:'From cache', fallback:'Default list'}[src.source]||'';
-  $('modelSource').textContent = label + (src.updated ? ' '+new Date(src.updated*1000).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : '');
+  $('modelSource').textContent = label + (src.updated ? ' '+fmtClock(src.updated) : '');
 }
 
 async function testModel(li){
@@ -426,7 +616,7 @@ async function testModel(li){
     res.classList.add('ok'); res.textContent = `OK · ${fmtMs(r.latency_ms)}`; res.title = r.text;
   }catch(e){
     if (e instanceof AuthError) return showGate(e.message);
-    res.classList.add('bad'); res.textContent = 'Error'; res.title = e.message;
+    res.classList.add('bad'); res.textContent = /429/.test(e.message) ? 'Limit / busy' : 'Error'; res.title = e.message;
   }finally{ btn.disabled=false; refreshStats(); }
 }
 
@@ -435,7 +625,7 @@ function renderStats(){
   $('kReq').textContent = fmtInt(s.requests);
   const rate = s.requests ? s.errors/s.requests*100 : 0;
   $('kReqHint').innerHTML = s.errors
-    ? `<span style="color:var(--bad)">${fmtInt(s.errors)} errors · ${rate.toLocaleString('en-US',{maximumFractionDigits:1})} %</span>`
+    ? `<span style="color:var(--bad)">${fmtInt(s.errors)} errors · ${rate.toLocaleString('en-US',{maximumFractionDigits:1})}%</span>`
     : 'no errors';
   $('kTok').textContent = fmtInt(s.tokens_in + s.tokens_out);
   $('kTokHint').textContent = `${fmtInt(s.tokens_in)} input · ${fmtInt(s.tokens_out)} output`;
@@ -445,9 +635,8 @@ function renderStats(){
   const last=[...s.log].reverse().find(e=>e.model);
   $('kLatHint').textContent = last ? `last ${fmtMs(last.ms)}` : 'no requests yet';
   $('uptime').textContent = 'up '+fmtDur(s.uptime_s);
-  const errs = s.timeline.reduce((a,b)=>a+b.errors,0);
-  $('chartErr').innerHTML = errs ? `<span style="color:var(--bad)">${errs} errors</span>` : '';
-  renderChart(); renderModels(); renderLog(); renderUsage(); renderLimits(); renderSave();
+  $('getStarted').hidden = s.requests > 0 || !state;
+  renderChart(); renderModels(); renderLog(); renderUsage(); renderLimits(); renderSave(); renderModelCharts();
 }
 
 function renderUsage(){
@@ -464,10 +653,8 @@ function renderUsage(){
   const sum=k=>u.rows.reduce((a,r)=>a+r[k],0);
   $('usageTotal').innerHTML = `<tr><td>Total</td><td class="r" data-l="Requests">${fmtInt(sum('requests'))}</td><td class="r" data-l="Input">${fmtInt(sum('tokens_in'))}</td><td class="r" data-l="Output">${fmtInt(sum('tokens_out'))}</td><td class="r" data-l="Cost">${fmtUsd(u.total_cost_usd)}</td></tr>`;
   const pi=u.pricing||{};
-  $('priceNote').textContent = (pi.fetched
-    ? `Live prices from OpenRouter (${fmtInt(pi.models)} models, ${fmtDate(pi.fetched)}). `
-    : 'Loading OpenRouter prices. ')
-    + 'This is what the same tokens would have cost on OpenRouter. OpenCode charges nothing.'
+  $('priceNote').textContent = (pi.fetched ? `Live prices from OpenRouter, ${fmtDate(pi.fetched)}. ` : 'Loading OpenRouter prices. ')
+    + 'This is what the same tokens would cost on OpenRouter. OpenCode charges nothing.'
     + (pi.error ? ` Last fetch failed: ${pi.error}` : '');
 }
 
@@ -476,75 +663,176 @@ function renderLimits(){
   $('lim5').textContent = `${fmtInt(l.requests_5h)} requests`;
   $('lim24').textContent = `${fmtInt(l.requests_24h)} requests`;
   const recent = l.last_limit_hit && Date.now()/1000 - l.last_limit_hit < 86400;
-  $('limHit').innerHTML = l.last_limit_hit
-    ? `<span style="color:${recent?'var(--bad)':'inherit'}">${fmtDate(l.last_limit_hit)}</span>${l.limit_hits_24h>1?` · ${l.limit_hits_24h}× in 24 h`:''}`
-    : 'never';
-  const st=$('limitState');
-  st.innerHTML = recent ? '<span style="color:var(--bad)">Limit hit recently</span>' : 'limit not hit';
+  $('limHit').innerHTML = l.last_limit_hit ? `<span style="color:${recent?'var(--bad)':'inherit'}">${fmtDate(l.last_limit_hit)}</span>` : 'never';
+  $('limitState').innerHTML = recent ? '<span style="color:var(--bad)">Limit hit recently</span>' : 'Within limit';
 }
 
 function renderSave(){
   const s=stats; if(!s) return;
   $('btnSave').hidden = !s.persistent;
   $('btnReset').hidden = !state?.local;
-  $('saveState').textContent = !s.persistent
-    ? 'Saving is off (--no-save)'
-    : (s.saved_at ? `Saved ${fmtClock(s.saved_at)}` : 'Not saved yet') + (s.since ? ` · since ${new Date(s.since*1000).toLocaleDateString('en-US')}` : '');
+  $('saveState').textContent = !s.persistent ? 'Saving is off' : (s.saved_at ? `Saved ${fmtClock(s.saved_at)}` : 'Not saved yet');
 }
 
+let chartMetric='requests', chartRange='30m';
+const compact = n => n >= 1e6 ? (n/1e6).toFixed(n>=1e7?0:1)+'M' : n >= 1e3 ? (n/1e3).toFixed(n>=1e4?0:1)+'k' : String(Math.round(n));
+function niceTop(v){ if (v <= 2) return 2; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 2, 2.5, 5, 10]) if (m*p >= v) return m*p; return 10*p; }
 function renderChart(){
-  const el=$('chart'), data=stats?.timeline||[], n=data.length; if(!n) return;
-  const W=el.clientWidth||600, H=el.clientHeight, padL=22, padB=16;
-  const top=Math.max(2, Math.ceil(Math.max(...data.map(d=>d.requests))/2)*2);
+  const el=$('chart'); if(!stats || !el.offsetParent) return;
+  const hourly = chartRange === '24h';
+  const data = hourly ? (stats.hourly||[]) : (stats.timeline||[]); const n = data.length; if(!n) return;
+  const tokens = chartMetric === 'tokens';
+  const series = tokens ? [['tokens_in','s0','Input'],['tokens_out','s1','Output']] : [['requests','s1','Requests']];
+  const totals = data.map(d => series.reduce((a,[k])=>a+d[k],0));
+  const top = niceTop(Math.max(...totals));
+  const W=el.clientWidth||600, H=el.clientHeight, padL=34, padB=16;
   const ih=H-padB-2, slot=(W-padL)/n, bw=Math.max(2, slot-3), rx=Math.min(2, bw/2);
   const y=v=>2+ih-(v/top)*ih;
-  let svg=`<svg viewBox="0 0 ${W} ${H}" aria-hidden="true"><line class="base" x1="${padL}" x2="${W}" y1="${y(0)}" y2="${y(0)}"/>`;
-  svg += `<text class="axis" x="${padL-6}" y="${y(top)+4}" text-anchor="end">${top}</text><text class="axis" x="${padL-6}" y="${y(0)+3}" text-anchor="end">0</text>`;
+  let svg=`<svg viewBox="0 0 ${W} ${H}" aria-hidden="true"><line class="grid" x1="${padL}" x2="${W}" y1="${y(top/2)}" y2="${y(top/2)}"/><line class="base" x1="${padL}" x2="${W}" y1="${y(0)}" y2="${y(0)}"/>`;
+  svg += `<text class="axis" x="${padL-6}" y="${y(top)+4}" text-anchor="end">${compact(top)}</text><text class="axis" x="${padL-6}" y="${y(top/2)+4}" text-anchor="end">${compact(top/2)}</text><text class="axis" x="${padL-6}" y="${y(0)+3}" text-anchor="end">0</text>`;
   data.forEach((d,i)=>{
     const x=padL+i*slot+1.5;
     svg += `<g class="col" data-i="${i}"><rect x="${padL+i*slot}" y="0" width="${slot}" height="${ih+2}" fill="transparent"/>`;
-    if (d.requests) svg += `<rect class="b" x="${x}" y="${y(d.requests)}" width="${bw}" height="${ih*(d.requests/top)}" rx="${rx}"/>`;
-    if (d.errors) svg += `<rect class="e" x="${x}" y="${y(d.errors)}" width="${bw}" height="${ih*(d.errors/top)}" rx="${rx}"/>`;
+    let base=0;
+    series.forEach(([k,cls],si)=>{
+      const v=d[k]; if(!v) return;
+      const gap = base && si ? 2 : 0;
+      const h = Math.max(1, ih*(v/top) - gap);
+      svg += `<rect class="${cls}" x="${x}" y="${y(base+v)}" width="${bw}" height="${h}" rx="${rx}"/>`;
+      base += v;
+    });
+    if (!tokens && d.errors) svg += `<rect class="e" x="${x}" y="${y(d.errors)}" width="${bw}" height="${ih*(d.errors/top)}" rx="${rx}"/>`;
     svg += '</g>';
   });
-  svg += `<text class="axis" x="${padL}" y="${H-2}">30 min ago</text><text class="axis" x="${W}" y="${H-2}" text-anchor="end">now</text></svg>`;
+  svg += `<text class="axis" x="${padL}" y="${H-2}">${hourly?'24 h ago':'30 min ago'}</text><text class="axis" x="${W}" y="${H-2}" text-anchor="end">now</text></svg>`;
   el.querySelectorAll('svg,.empty-note').forEach(x=>x.remove());
   el.insertAdjacentHTML('beforeend', svg);
-  if (!data.some(d=>d.requests)) el.insertAdjacentHTML('beforeend','<div class="empty-note">No requests in the last 30 minutes</div>');
+  if (!totals.some(Boolean)) el.insertAdjacentHTML('beforeend', `<div class="empty-note">No ${tokens?'tokens':'requests'} in the last ${hourly?'24 hours':'30 minutes'}</div>`);
+  $('legend').innerHTML = tokens
+    ? '<span style="--c:var(--c-in)"><i></i>Input</span><span style="--c:var(--c-out)"><i></i>Output</span>'
+    : '<span style="--c:var(--c-out)"><i></i>Requests</span><span style="--c:var(--bad)"><i></i>Errors</span>';
+  $('chartCap').textContent = `${tokens?'Tokens':'Requests'} per ${hourly?'hour · last 24 hours':'minute · last 30 minutes'}`;
+  const errs = data.reduce((a,b)=>a+b.errors,0);
+  $('chartErr').innerHTML = errs ? `<span style="color:var(--bad)">${errs} errors</span>` : '';
   const tip=$('tip');
   el.querySelectorAll('g.col').forEach(g=>{
     g.onmouseenter=()=>{ const i=+g.dataset.i, d=data[i], ago=n-1-i;
-      tip.textContent = `${d.requests} requests${d.errors?`, ${d.errors} errors`:''} · ${ago?`${ago} min ago`:'this minute'}`;
-      tip.style.left=(padL+(i+.5)*slot)+'px'; tip.style.top=y(d.requests)+'px'; tip.style.opacity=1; };
-    g.onmouseleave=()=>tip.style.opacity=0;
+      const when = ago ? `${ago} ${hourly?'h':'min'} ago` : (hourly?'this hour':'this minute');
+      tip.textContent = tokens
+        ? `${fmtInt(d.tokens_in)} in · ${fmtInt(d.tokens_out)} out · ${when}`
+        : `${d.requests} requests${d.errors?`, ${d.errors} errors`:''} · ${when}`;
+      const half = tip.offsetWidth/2, cx = padL+(i+.5)*slot;
+      tip.style.left=Math.min(Math.max(cx, half), W-half)+'px'; tip.style.top=y(totals[i])+'px'; tip.style.opacity=1; };
+    g.onmouseleave=()=>{ tip.style.opacity=0; tip.style.left='0px'; };
   });
 }
+radio($('chartMetric'), b=>{ chartMetric=b.dataset.v; renderChart(); });
+radio($('chartRange'), b=>{ chartRange=b.dataset.v; renderChart(); });
 
-function renderLog(){
-  const rows=[...(stats?.log||[])].reverse().filter(e=>logFilter==='all' || e.status>=400 || e.error).slice(0,150);
-  $('log').innerHTML = rows.length ? rows.map(e=>{
-    const bad = e.status>=400 || e.error;
-    const tok=(e.tokens_in||0)+(e.tokens_out||0);
-    const sub=[e.model, tok?`${fmtInt(e.tokens_in||0)} in · ${fmtInt(e.tokens_out||0)} out`:'', tok&&e.cost_usd!=null?fmtUsd(e.cost_usd):'', e.client!=='local'?e.client:''].filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join('');
-    return `<li><span class="t">${esc(e.t)}</span><div style="min-width:0"><div class="l-title">${esc(e.method)} ${esc(e.path)}</div>${sub||e.error?`<div class="l-sub">${sub}${e.error?`<span class="errline" title="${esc(e.error)}">${esc(e.error.slice(0,140))}</span>`:''}</div>`:''}</div><span class="code ${bad?'bad':''}">${e.status||'—'} · ${fmtMs(e.ms)}</span></li>`;
-  }).join('') : `<li class="empty-row" style="display:block">${logFilter==='err'?'No errors.':'No requests yet. Send a message above or test a model.'}</li>`;
+function hbars(el, rows, empty){
+  if (!rows.length){ el.innerHTML = `<li class="none">${empty}</li>`; return; }
+  const max = Math.max(...rows.map(r => r.parts.reduce((a,p)=>a+p.v,0))) || 1;
+  el.innerHTML = rows.map(r => {
+    const segs = r.parts.filter(p=>p.v>0).map(p => `<b style="--c:${p.c}; width:${(p.v/max*100).toFixed(2)}%" title="${esc(p.t)}"></b>`).join('');
+    return `<li><span class="n" title="${esc(r.name)}">${esc(r.name)}</span><span class="track">${segs}</span><span class="val">${esc(r.label)}</span></li>`;
+  }).join('');
+}
+function renderModelCharts(){
+  const u = stats?.usage; if (!u) return;
+  const used = u.rows.filter(r => r.tokens_in + r.tokens_out > 0).sort((a,b)=>(b.tokens_in+b.tokens_out)-(a.tokens_in+a.tokens_out));
+  hbars($('tokChart'), used.map(r => ({ name:r.model, label:compact(r.tokens_in+r.tokens_out), parts:[
+    {v:r.tokens_in, c:'var(--c-in)', t:`${fmtInt(r.tokens_in)} input tokens`},
+    {v:r.tokens_out, c:'var(--c-out)', t:`${fmtInt(r.tokens_out)} output tokens`}]})), 'No tokens yet.');
+  const priced = used.filter(r => r.cost_usd).sort((a,b)=>b.cost_usd-a.cost_usd);
+  hbars($('costChart'), priced.map(r => ({ name:r.model, label:fmtUsd(r.cost_usd), parts:[{v:r.cost_usd, c:'var(--c-out)', t:fmtUsd(r.cost_usd)}]})), 'No priced usage yet.');
+  const lat = Object.entries(stats.models||{}).filter(([,s])=>s.requests).sort((a,b)=>a[1].avg_ms-b[1].avg_ms);
+  hbars($('latChart'), lat.map(([name,s]) => ({ name, label:fmtMs(s.avg_ms), parts:[{v:s.avg_ms, c:'var(--c-out)', t:`${fmtMs(s.avg_ms)} over ${s.requests} requests`}]})), 'Test a model or send a message to see response times.');
 }
 
+function logRow(e){
+  const bad = e.status>=400 || e.error;
+  const tok=(e.tokens_in||0)+(e.tokens_out||0);
+  const sub=[e.model, tok?`${fmtInt(e.tokens_in||0)} in · ${fmtInt(e.tokens_out||0)} out`:'', tok&&e.cost_usd!=null?fmtUsd(e.cost_usd):'', e.client!=='local'?e.client:''].filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join('');
+  return `<li><span class="t">${esc(e.t)}</span><div style="min-width:0"><div class="l-title">${esc(e.method)} ${esc(e.path)}</div>${sub||e.error?`<div class="l-sub">${sub}${e.error?`<span class="errline" title="${esc(e.error)}">${esc(e.error.slice(0,140))}</span>`:''}</div>`:''}</div><span class="code ${bad?'bad':''}">${e.status||'—'} · ${fmtMs(e.ms)}</span></li>`;
+}
+function renderLog(){
+  const all=[...(stats?.log||[])].reverse();
+  const rows=all.filter(e=>logFilter==='all' || e.status>=400 || e.error).slice(0,200);
+  const empty = msg => `<li class="empty-row" style="display:block">${msg}</li>`;
+  $('log').innerHTML = rows.length ? rows.map(logRow).join('') : empty(logFilter==='err'?'No errors.':'No requests yet.');
+  $('recent').innerHTML = all.length ? all.slice(0,5).map(logRow).join('') : empty('No requests yet. Connect an app or try a model.');
+}
+
+async function loadSettings(){
+  if (!state) return;
+  $('settingsLocked').hidden = state.local;
+  $('settingsForm').hidden = !state.local;
+  if (!state.local) return;
+  try{ settings = await api('/api/dashboard/settings'); renderSettings(); }
+  catch(e){ toast(e.message); }
+}
+function renderSettings(){
+  const s=settings; if(!s) return;
+  $$('#access .choice').forEach(c=>c.setAttribute('aria-checked', c.dataset.v===s.access));
+  $('setPort').value = s.port;
+  $('setBrowser').setAttribute('aria-checked', s.open_browser);
+  $('rowAutostart').hidden = s.autostart === null;
+  $('setAutostart').setAttribute('aria-checked', !!s.autostart);
+  $('dataDir').textContent = s.data_dir;
+  $$('[data-restart-notice]').forEach(n=>n.hidden=!s.restart_required);
+  $('overrideNotice').hidden = !s.overridden;
+  $('restartNotice').hidden = !s.restart_required;
+}
+$('access').onclick = e => { const c=e.target.closest('.choice'); if(!c) return; $$('#access .choice').forEach(x=>x.setAttribute('aria-checked', x===c)); };
+$$('.switch').forEach(sw => sw.onclick = () => sw.setAttribute('aria-checked', sw.getAttribute('aria-checked') !== 'true'));
+$('btnSaveSettings').onclick = e => busy(e.currentTarget, async () => {
+  const body = {
+    access: $$('#access .choice').find(c=>c.getAttribute('aria-checked')==='true')?.dataset.v,
+    port: $('setPort').value.trim(),
+    open_browser: $('setBrowser').getAttribute('aria-checked') === 'true',
+  };
+  if (settings?.autostart !== null) body.autostart = $('setAutostart').getAttribute('aria-checked') === 'true';
+  settings = await api('/api/dashboard/settings', body);
+  renderSettings();
+  toast(settings.restart_required ? 'Saved. Restart to apply.' : 'Saved');
+});
+
+async function restart(btn){
+  await busy(btn, async () => {
+    const r = await api('/api/dashboard/restart', {});
+    const target = `${location.protocol}//${location.hostname}:${r.port}/${location.hash}`;
+    $('state').innerHTML = '<b>Restarting</b>';
+    toast('Restarting');
+    for (let i = 0; i < 40; i++){
+      await sleep(500);
+      try{ const h = await fetch(`${location.protocol}//${location.hostname}:${r.port}/health`, {cache:'no-store'}); if (h.ok){ location.href = target; if (String(r.port) === location.port || (!location.port && r.port===80)) location.reload(); return; } }catch{}
+    }
+    toast('The server did not come back. Start oc-free-api again.');
+  });
+}
+$$('[data-restart]').forEach(b => b.onclick = () => restart(b));
+
+let routed = false;
 async function loadState(){
-  try{ state = await api('/api/dashboard'); $('gate').hidden=true; $('app').hidden=false; setState(true); renderAccess(); renderModels(); }
+  try{ state = await api('/api/dashboard'); $('gate').hidden=true; $('app').hidden=false; setState(true); renderAccess(); renderModels(); if (!routed){ routed = true; route(); } }
   catch(e){ if (e instanceof AuthError) showGate(remoteKey ? 'The key was not accepted. Please check it.' : ''); else setState(false); }
 }
 async function refreshStats(){
-  if (!state) return;
+  if (!state || stopped) return;
   try{ stats = await api('/api/dashboard/stats'); setState(true); renderStats(); }
   catch(e){ if (e instanceof AuthError) showGate('The key is no longer valid. Please enter the new one.'); else setState(false); }
 }
-function showGate(msg){ state=null; $('app').hidden=true; $('gate').hidden=false; $('state').innerHTML='<b>Key required</b>'; const h=$('gateHint'); h.textContent=msg||''; h.classList.toggle('bad', !!msg); $('gateKey').value=remoteKey; $('gateKey').focus(); }
-$('gateForm').onsubmit = async ev => { ev.preventDefault(); remoteKey=$('gateKey').value.trim(); store.set(remoteKey); await loadState(); refreshStats(); };
+function showGate(msg){
+  state=null; $('app').hidden=true; $('nav').hidden=true; $('gate').hidden=false; $('state').innerHTML='<b>Key required</b>';
+  const h=$('gateHint'); h.textContent=msg||'The API key is in api-key.txt next to the server.'; h.classList.toggle('bad', !!msg);
+  $('gateInput').value=remoteKey; $('gateInput').focus();
+}
+$('gateForm').onsubmit = async ev => { ev.preventDefault(); remoteKey=$('gateInput').value.trim(); store.set(remoteKey); await loadState(); refreshStats(); };
+$('logout').onclick = () => { remoteKey=''; store.set(''); showGate(''); };
 
 async function copy(text){ try{ await navigator.clipboard.writeText(text.trim()); toast('Copied'); }catch{ toast('Copy failed. Please select it manually.'); } }
-document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copy($(b.dataset.copy).textContent));
-$('btnCopyKey').onclick=()=>copy(keyText()||'');
+$$('[data-copy-text]').forEach(b=>b.onclick=()=>copy($(b.dataset.copyText).textContent));
+$$('[data-copy-key]').forEach(b=>b.onclick=()=>copy(keyText()||''));
 $('btnSnip').onclick=()=>copy($('snip').dataset.copy||$('snip').textContent);
 $('btnReveal').onclick=()=>{ revealed=!revealed; renderAccess(); };
 function radio(group, onPick){ group.onclick=e=>{ const b=e.target.closest('[role=radio]'); if(!b) return; group.querySelectorAll('[role=radio]').forEach(x=>x.setAttribute('aria-checked', x===b)); onPick(b); }; }
@@ -553,10 +841,14 @@ radio($('logFilter'), b=>{ logFilter=b.dataset.f; renderLog(); });
 
 $('btnRefresh').onclick=e=>busy(e.currentTarget, async()=>{ const r=await api('/api/dashboard/refresh',{}); await loadState(); toast(r.source==='live'?`${r.models.length} models fetched`:'Fetch failed. Keeping the current list.'); });
 $('btnTestAll').onclick=e=>busy(e.currentTarget, async()=>{ for (const li of $('models').children) await testModel(li); });
-armed($('btnKey'), 'Really replace it?', async()=>{ await api('/api/dashboard/key',{}); await loadState(); toast('New key active. Clients need it now.'); });
 $('btnSave').onclick=e=>busy(e.currentTarget, async()=>{ const r=await api('/api/dashboard/save',{}); toast(`Saved to ${r.file.split(/[\\/]/).pop()}`); refreshStats(); });
 armed($('btnReset'), 'Really delete all?', async()=>{ await api('/api/dashboard/reset',{}); toast('Stats reset'); refreshStats(); });
-armed($('btnStop'), 'Really stop?', async()=>{ await api('/api/dashboard/stop',{}); toast('Stopping server'); setTimeout(()=>setState(false),600); });
+armed($('btnKey'), 'Really replace it?', async()=>{ await api('/api/dashboard/key',{}); await loadState(); toast('New key active. Update your apps.'); });
+armed($('btnStop'), 'Really stop?', async()=>{
+  await api('/api/dashboard/stop',{});
+  stopped = true; $('app').hidden = true; $('nav').hidden = true; $('stopped').hidden = false;
+  $('state').classList.add('down'); $('state').innerHTML = '<b>Stopped</b>'; $('uptime').textContent = '';
+});
 
 let pgAbort=null;
 async function sendPrompt(){
@@ -591,7 +883,7 @@ async function sendPrompt(){
       }
     }
     const total=Math.round(performance.now()-t0);
-    meta.textContent = `${model} · ${fmtMs(total)}` + (first!=null?` · first token after ${fmtMs(Math.round(first))}`:'') + (usage?` · ${fmt(usage.total_tokens)} Tokens`:'');
+    meta.textContent = `${model} · ${fmtMs(total)}` + (first!=null?` · first token after ${fmtMs(Math.round(first))}`:'') + (usage?` · ${fmt(usage.total_tokens)} tokens`:'');
     if(!text.textContent && !think.textContent) text.textContent = 'The model returned nothing. Try another model.';
   }catch(e){
     if(e.name==='AbortError') meta.textContent=`${model} · Cancelled`;
@@ -605,7 +897,12 @@ $('pgStop').onclick=()=>pgAbort?.abort();
 $('pgPrompt').onkeydown=e=>{ if(e.key==='Enter' && (e.ctrlKey||e.metaKey)){ e.preventDefault(); sendPrompt(); } };
 
 addEventListener('resize', ()=>stats && renderChart());
-(async()=>{ await loadState(); await refreshStats(); setInterval(refreshStats, 2500); setInterval(()=>state && loadState(), 60000); })();
+(async()=>{
+  await loadState(); await refreshStats();
+  if (state?.local) { try{ settings = await api('/api/dashboard/settings'); renderSettings(); }catch{} }
+  setInterval(refreshStats, 2500);
+  setInterval(()=>state && !stopped && loadState(), 60000);
+})();
 </script>
 </body>
 </html>

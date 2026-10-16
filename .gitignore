@@ -10,3 +10,7 @@ pricing.json
 build/
 dist/
 *.spec
+config.json
+config.json.tmp
+server.log
+server.log.1
