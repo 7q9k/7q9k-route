@@ -1,0 +1,4 @@
+api-key.txt
+models.json
+*.pyc
+__pycache__/
