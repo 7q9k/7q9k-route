@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import http.client
 import ipaddress
 import itertools
 import json
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -22,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -190,12 +192,24 @@ def available_models(timeout: float = 15.0, refresh: bool = False) -> list[str]:
         if models:
             _save_model_cache(models)
             _MODEL_SNAPSHOT, _MODEL_SOURCE = tuple(models), "live"
+            _MODEL_UPDATED = time.time()
         elif _MODEL_SNAPSHOT is None:
-            cached = _load_model_cache()
-            _MODEL_SNAPSHOT = tuple(cached or FALLBACK_MODELS)
-            _MODEL_SOURCE = "cache" if cached else "fallback"
-        _MODEL_UPDATED = time.time()
+            _preload_models_locked()
         return list(_MODEL_SNAPSHOT)
+
+
+def _preload_models_locked() -> None:
+    global _MODEL_SNAPSHOT, _MODEL_SOURCE, _MODEL_UPDATED
+    cached = _load_model_cache()
+    _MODEL_SNAPSHOT = tuple(cached or FALLBACK_MODELS)
+    _MODEL_SOURCE = "cache" if cached else "fallback"
+    _MODEL_UPDATED = time.time()
+
+
+def preload_models() -> None:
+    with _MODEL_LOCK:
+        if _MODEL_SNAPSHOT is None:
+            _preload_models_locked()
 
 
 def model_source() -> dict[str, Any]:
@@ -231,8 +245,13 @@ def _sse_lines_to_payloads(response: Any) -> Iterator[dict[str, Any]]:
                     raise ProxyError(f"upstream sent invalid JSON: {payload[:200]}") from exc
     except TimeoutError as exc:
         raise ProxyError("upstream timed out while streaming.", 504) from exc
+    except (OSError, http.client.HTTPException) as exc:
+        raise ProxyError(f"upstream connection lost: {type(exc).__name__}") from exc
     finally:
-        response.close()
+        try:
+            response.close()
+        except Exception:
+            pass
 
 
 def upstream_stream(
@@ -259,16 +278,17 @@ def upstream_stream(
     try:
         response = _OPENER.open(request, timeout=timeout)
     except urllib.error.HTTPError as exc:
-        raise ProxyError(
-            f"upstream rejected request (HTTP {exc.code}): "
-            f"{exc.read().decode('utf-8', 'replace')[:500]}",
-            502 if exc.code >= 500 else exc.code,
-        ) from exc
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:500]
+        except Exception:
+            detail = ""
+        status = exc.code if 400 <= exc.code < 500 else 502
+        raise ProxyError(f"upstream rejected request (HTTP {exc.code}): {detail}", status) from exc
     except urllib.error.URLError as exc:
         raise ProxyError(f"upstream connection failed: {exc.reason}") from exc
     except TimeoutError as exc:
         raise ProxyError("upstream timed out.", 504) from exc
-    except OSError as exc:
+    except (OSError, http.client.HTTPException) as exc:
         raise ProxyError(f"upstream connection failed: {exc}") from exc
 
     return _sse_lines_to_payloads(response)
@@ -434,8 +454,16 @@ _PASSTHROUGH_KEYS = (
 )
 
 
+def validate_messages(messages: Any) -> list[dict[str, Any]]:
+    if messages is None:
+        return []
+    if not isinstance(messages, list) or not all(isinstance(m, dict) for m in messages):
+        raise ProxyError("'messages' must be a list of message objects.", 400)
+    return messages
+
+
 def build_chat_request(req: dict[str, Any]) -> dict[str, Any]:
-    messages = list(req.get("messages") or [])
+    messages = list(validate_messages(req.get("messages")))
     if not any(
         isinstance(m, dict) and m.get("role") == "system" for m in messages
     ):
@@ -556,8 +584,8 @@ def _responses_input(
 
 
 def build_responses_request(req: dict[str, Any]) -> dict[str, Any]:
-    tools = req.get("tools") if isinstance(req.get("tools"), list) else []
-    input_items, instructions = _responses_input(list(req.get("messages") or []))
+    tools = [t for t in req.get("tools") or [] if isinstance(t, dict)] if isinstance(req.get("tools"), list) else []
+    input_items, instructions = _responses_input(list(validate_messages(req.get("messages"))))
     body: dict[str, Any] = {
         "model": req.get("model") or DEFAULT_MODEL,
         "input": input_items,
@@ -1193,6 +1221,8 @@ def ollama_to_openai_messages(messages: list[Any]) -> list[dict[str, Any]]:
         if role == "assistant" and isinstance(message.get("tool_calls"), list):
             calls = []
             for call in message["tool_calls"]:
+                if not isinstance(call, dict):
+                    continue
                 function = call.get("function") or {}
                 name = str(function.get("name") or "")
                 arguments = function.get("arguments") or "{}"
@@ -1315,11 +1345,16 @@ def ollama_generate_response(completion: dict[str, Any]) -> dict[str, Any]:
 _TEST_PROMPT = "Reply with exactly the token: OK-DASH"
 
 
-def open_upstream_events(req: dict[str, Any], model: str) -> Iterator[dict[str, Any]]:
+TEST_TIMEOUT = 120.0
+
+
+def open_upstream_events(
+    req: dict[str, Any], model: str, timeout: float = UPSTREAM_TIMEOUT
+) -> Iterator[dict[str, Any]]:
     if uses_responses_api(model):
-        events = upstream_stream(RESPONSES_URL, build_responses_request({**req, "model": model}))
+        events = upstream_stream(RESPONSES_URL, build_responses_request({**req, "model": model}), timeout)
         return responses_events_to_deltas(events)
-    return upstream_stream(DIRECT_URL, build_chat_request({**req, "model": model}))
+    return upstream_stream(DIRECT_URL, build_chat_request({**req, "model": model}), timeout)
 
 
 def run_model_test(model: str, prompt: str | None = None) -> dict[str, Any]:
@@ -1329,7 +1364,7 @@ def run_model_test(model: str, prompt: str | None = None) -> dict[str, Any]:
         "messages": [{"role": "user", "content": prompt or _TEST_PROMPT}],
         "stream": False,
     }
-    completion = merge_deltas(open_upstream_events(req, model), model)
+    completion = merge_deltas(open_upstream_events(req, model, timeout=TEST_TIMEOUT), model)
     latency_ms = (time.perf_counter() - start) * 1000
     message = completion["choices"][0]["message"]
     usage = _usage(completion.get("usage"))
@@ -1349,6 +1384,7 @@ class Metrics:
 
     def __init__(self, path: Path | None = None) -> None:
         self.lock = threading.Lock()
+        self.save_lock = threading.Lock()
         self.path = path
         self.started = time.time()
         self.saved_at: float | None = None
@@ -1467,7 +1503,7 @@ class Metrics:
                 },
                 "timeline": timeline,
                 "hourly": hourly,
-                "log": list(self.log),
+                "log": [dict(e) for e in self.log],
             }
 
     def _state(self) -> dict[str, Any]:
@@ -1490,20 +1526,21 @@ class Metrics:
     def save(self) -> float | None:
         if self.path is None:
             return None
-        with self.lock:
-            data = json.dumps(self._state(), separators=(",", ":"))
-            self.dirty = False
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        try:
-            tmp.write_text(data, encoding="utf-8")
-            os.replace(tmp, self.path)
-        except OSError:
+        with self.save_lock:
             with self.lock:
-                self.dirty = True
-            raise
-        with self.lock:
-            self.saved_at = time.time()
-            return self.saved_at
+                data = json.dumps(self._state(), separators=(",", ":"))
+                self.dirty = False
+            tmp = self.path.with_name(self.path.name + ".tmp")
+            try:
+                tmp.write_text(data, encoding="utf-8")
+                os.replace(tmp, self.path)
+            except OSError:
+                with self.lock:
+                    self.dirty = True
+                raise
+            with self.lock:
+                self.saved_at = time.time()
+                return self.saved_at
 
     def load(self) -> bool:
         if self.path is None or not self.path.exists():
@@ -1514,6 +1551,15 @@ class Metrics:
             return False
         if not isinstance(state, dict) or state.get("version") != self.SAVE_VERSION:
             return False
+        try:
+            self._apply_state(state)
+        except (TypeError, ValueError, AttributeError, KeyError):
+            with self.lock:
+                self._reset_counters()
+            return False
+        return True
+
+    def _apply_state(self, state: dict[str, Any]) -> None:
         with self.lock:
             self.since = float(state.get("since") or time.time())
             self.requests = int(state.get("requests", 0))
@@ -1546,7 +1592,6 @@ class Metrics:
             )
             self.saved_at = self.path.stat().st_mtime
             self.dirty = False
-        return True
 
     def reset(self) -> None:
         with self.lock:
@@ -1576,6 +1621,7 @@ class Pricing:
         self.prices: dict[str, dict[str, float]] = {}
         self.error: str | None = None
         self._refreshing = False
+        self._last_attempt = 0.0
         self._matches: dict[str, str | None] = {}
         if path is not None:
             self._load()
@@ -1633,10 +1679,14 @@ class Pricing:
         return True
 
     def refresh_async(self, *, force: bool = False) -> None:
+        now = time.time()
         with self.lock:
-            if self._refreshing or (not force and time.time() - self.fetched < PRICING_TTL):
+            if self._refreshing:
+                return
+            if not force and (now - self.fetched < PRICING_TTL or now - self._last_attempt < 300):
                 return
             self._refreshing = True
+            self._last_attempt = now
 
         def run() -> None:
             try:
@@ -1810,6 +1860,26 @@ def autostart_command() -> str:
     return f'"{interpreter}" "{Path(__file__).resolve()}" --background'
 
 
+def _autostart_value() -> str | None:
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY) as key:
+            return str(winreg.QueryValueEx(key, AUTOSTART_NAME)[0])
+    except OSError:
+        return None
+
+
+def refresh_autostart() -> None:
+    if not autostart_supported():
+        return
+    try:
+        value = _autostart_value()
+        if value is not None and value != autostart_command():
+            set_autostart(True)
+    except OSError:
+        pass
+
+
 def autostart_enabled() -> bool | None:
     if not autostart_supported():
         return None
@@ -1836,10 +1906,21 @@ def set_autostart(enabled: bool) -> None:
                 pass
 
 
+def port_available(host: str, port: int) -> bool:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
 def public_urls(port: int) -> dict[str, str | None]:
     lan = _lan_ip() if BOUND_OPEN else None
     return {
-        "local": f"http://localhost:{port}",
+        "local": f"http://127.0.0.1:{port}",
         "network": f"http://{lan}:{port}" if lan and lan != "127.0.0.1" else None,
     }
 
@@ -1869,7 +1950,7 @@ def dashboard_state(*, local: bool) -> dict[str, Any]:
         "version": APP_VERSION,
         "local": local,
         "urls": public_urls(BOUND_PORT),
-        "api_key": (api_key_cache() or "(restart required)") if local else None,
+        "api_key": (OpenAICompatibleHandler.api_key or api_key_cache()) if local else None,
         "models": [
             {"id": m, "api": "responses" if uses_responses_api(m) else "chat"}
             for m in models
@@ -1947,15 +2028,32 @@ def _paint(text: str, color: str) -> str:
 LOG_STREAM: Any = None
 
 
+LOG_MAX_BYTES = 5_000_000
+
+
+def _rotate_log_if_needed() -> None:
+    global LOG_STREAM
+    try:
+        if LOG_STREAM is None or LOG_STREAM.tell() < LOG_MAX_BYTES:
+            return
+        LOG_STREAM.close()
+        os.replace(LOG_FILE, LOG_FILE.with_name(LOG_FILE.name + ".1"))
+        LOG_STREAM = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+    except (OSError, ValueError):
+        pass
+
+
 def _emit(line: str, stream: Any = None) -> None:
+    _rotate_log_if_needed()
     targets = [LOG_STREAM] if LOG_STREAM is not None else [stream or sys.stdout]
     for target in targets:
         if target is None:
             continue
         try:
-            target.write(line + "\n")
-        except UnicodeEncodeError:
-            target.write(line.encode("ascii", "replace").decode("ascii") + "\n")
+            try:
+                target.write(line + "\n")
+            except UnicodeEncodeError:
+                target.write(line.encode("ascii", "replace").decode("ascii") + "\n")
         except (OSError, ValueError):
             continue
         try:
@@ -1984,6 +2082,28 @@ def open_log_file() -> None:
     VT = False
 
 
+def _set_console_icon() -> None:
+    try:
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetConsoleWindow.restype = wintypes.HWND
+        user32.LoadImageW.restype = wintypes.HANDLE
+        user32.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT,
+                                      ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        hwnd = kernel32.GetConsoleWindow()
+        icon = ASSETS_DIR / "icon.ico"
+        if not hwnd or not icon.exists():
+            return
+        for which, size in ((0, 16), (1, 32)):
+            handle = user32.LoadImageW(None, str(icon), 1, size, size, 0x10)
+            if handle:
+                user32.SendMessageW(hwnd, 0x80, which, handle)
+    except Exception:
+        pass
+
+
 def _windows_console_open() -> bool:
     if os.name != "nt":
         return False
@@ -1992,6 +2112,7 @@ def _windows_console_open() -> bool:
         if not kernel32.AllocConsole():
             return False
         kernel32.SetConsoleTitleW("oc-free-api")
+        _set_console_icon()
         global CONSOLE_OUT
         CONSOLE_OUT = open("CONOUT$", "w", encoding="utf-8", buffering=1)
         sys.stdout = CONSOLE_OUT
@@ -2046,13 +2167,14 @@ def _print_banner(port: int, host: str, key: str, models: list[str]) -> None:
             + _paint(f"http://{_lan_ip()}:{port}/", "green")
             + _paint("  (LAN access requires the API key)", "dim")
         )
-    _emit("  " + _paint("Base URL  ", "cyan") + _paint(f"http://localhost:{port}/v1", "bright"))
+    _emit("  " + _paint("Base URL  ", "cyan") + _paint(f"http://127.0.0.1:{port}/v1", "bright"))
     _emit("  " + _paint("API-Key   ", "cyan") + _paint(key, "yellow"))
     _emit(
         "  " + _paint("Models    ", "cyan")
         + _paint(f"{len(models)} available: {shown_models}", "bright")
     )
-    _emit("  " + _paint("Stop      ", "cyan") + _paint("Ctrl+C or close this window", "dim"))
+    stop_hint = "dashboard > Settings > Stop server" if LOG_STREAM is not None else "Ctrl+C or close this window"
+    _emit("  " + _paint("Stop      ", "cyan") + _paint(stop_hint, "dim"))
     _emit("")
 
 
@@ -2129,6 +2251,7 @@ CLIENT_GONE = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 class OpenAICompatibleHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = f"oc-free-api/{APP_VERSION}"
+    timeout = 300
 
     api_key: str = ""
 
@@ -2228,7 +2351,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             "t": time.strftime("%H:%M:%S"),
             "ts": time.time(),
             "method": method,
-            "path": self._path,
+            "path": "".join(c if c.isprintable() else "?" for c in self._path)[:200],
             "status": status,
             "ms": round((time.time() - self._t0) * 1000),
             "client": "local" if self._is_loopback() else self._client_ip(),
@@ -2299,7 +2422,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         except ValueError:
             pass
         machine = socket.gethostname().lower().split(".", 1)[0]
-        return hostname.split(".", 1)[0] == machine
+        return hostname in (machine, f"{machine}.local", f"{machine}.lan", f"{machine}.home")
 
     def _origin_ok(self) -> bool:
         if self.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
@@ -2541,21 +2664,26 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     def _post_settings(self) -> None:
         req = self._read_json()
+        changes: dict[str, Any] = {}
+        if "access" in req:
+            if req["access"] not in ACCESS_HOSTS:
+                raise ProxyError("access must be local or network.", 400)
+            changes["access"] = req["access"]
+        if "port" in req:
+            try:
+                port = int(str(req["port"]).strip())
+            except (TypeError, ValueError) as exc:
+                raise ProxyError("port must be a number.", 400) from exc
+            if not 1024 <= port <= 65535:
+                raise ProxyError("port must be between 1024 and 65535.", 400)
+            changes["port"] = port
+        for flag in ("open_browser", "autostart"):
+            if flag in req and req[flag] is not None and not isinstance(req[flag], bool):
+                raise ProxyError(f"{flag} must be true or false.", 400)
+        if "open_browser" in req:
+            changes["open_browser"] = bool(req["open_browser"])
         with CONFIG_LOCK:
-            if "access" in req:
-                if req["access"] not in ACCESS_HOSTS:
-                    raise ProxyError("access must be local or network.", 400)
-                CONFIG["access"] = req["access"]
-            if "port" in req:
-                try:
-                    port = int(req["port"])
-                except (TypeError, ValueError) as exc:
-                    raise ProxyError("port must be a number.", 400) from exc
-                if not 1 <= port <= 65535:
-                    raise ProxyError("port must be between 1 and 65535.", 400)
-                CONFIG["port"] = port
-            if "open_browser" in req:
-                CONFIG["open_browser"] = bool(req["open_browser"])
+            CONFIG.update(changes)
         if "autostart" in req and req["autostart"] is not None:
             try:
                 set_autostart(bool(req["autostart"]))
@@ -2570,9 +2698,12 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
     def _post_restart(self) -> None:
         global RESTART_REQUESTED
         with CONFIG_LOCK:
-            port = CONFIG["port"]
-        self._send_json(200, {"ok": True, "restarting": True, "port": port})
+            host = CLI_HOST or ACCESS_HOSTS[CONFIG["access"]]
+            port = CLI_PORT or CONFIG["port"]
+        if (host, port) != (BOUND_HOST, BOUND_PORT) and not port_available(host, port):
+            raise ProxyError(f"port {port} is already used by another program. Pick another port.", 409)
         RESTART_REQUESTED = True
+        self._send_json(200, {"ok": True, "restarting": True, "port": port})
         if SERVER is not None:
             threading.Thread(target=SERVER.shutdown, daemon=True).start()
 
@@ -2634,6 +2765,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     def _post_chat_completions(self) -> None:
         req = self._read_json()
+        validate_messages(req.get("messages"))
         model = self._resolve_model(req.get("model"))
         deltas = self._open_upstream(req, model)
         if bool(req.get("stream")):
@@ -2886,7 +3018,8 @@ def _print_window_banner(port: int) -> None:
     _emit("")
     _emit("  oc-free-api is running")
     _emit("")
-    _emit(f"  Dashboard        {urls['local']}")
+    _emit(f"  Dashboard        http://localhost:{port}")
+    _emit(f"  Base URL         {urls['local']}/v1")
     if urls["network"]:
         _emit(f"  On your network  {urls['network']}")
     _emit("")
@@ -2907,7 +3040,59 @@ def _restart_process() -> None:
         os.execve(sys.executable, argv, env)
 
 
+def _use_data_dir(path: Path) -> None:
+    global DATA_DIR, STATS_FILE, PRICING_FILE, CONFIG_FILE, LOG_FILE, MODEL_CACHE, KEY_FILE
+    DATA_DIR = path.resolve()
+    STATS_FILE = DATA_DIR / "stats.json"
+    PRICING_FILE = DATA_DIR / "pricing.json"
+    CONFIG_FILE = DATA_DIR / "config.json"
+    LOG_FILE = DATA_DIR / "server.log"
+    MODEL_CACHE = DATA_DIR / "models.json"
+    KEY_FILE = DATA_DIR / "api-key.txt"
+
+
+def _writable(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write-test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def _ensure_data_dir() -> None:
+    if _writable(DATA_DIR):
+        return
+    fallback = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "oc-free-api"
+    _use_data_dir(fallback)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
 def main() -> None:
+    try:
+        _main()
+    except SystemExit:
+        raise
+    except Exception:
+        details = traceback.format_exc()
+        _emit("")
+        _emit("  oc-free-api could not start:")
+        _emit("  " + details.strip().splitlines()[-1])
+        try:
+            with open(LOG_FILE, "a", encoding="utf-8") as log:
+                log.write(details + "\n")
+        except OSError:
+            pass
+        if CONSOLE_OUT is not None:
+            _emit(f"  Details are in {LOG_FILE}. This window closes in 30 seconds.")
+            time.sleep(30)
+            _windows_console_close()
+        raise SystemExit(1)
+
+
+def _main() -> None:
     global SERVER, BOUND_OPEN, BOUND_PORT, BOUND_HOST, CONFIG, METRICS, PRICING, CLI_HOST, CLI_PORT
     parser = argparse.ArgumentParser(
         description="OpenAI-compatible local API for OpenCode Zen free models."
@@ -2926,7 +3111,7 @@ def main() -> None:
     show_window = windows_app and not args.background and not restarted
     if show_window and not _windows_console_open():
         show_window = False
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_data_dir()
     if not show_window and (sys.stdout is None or (os.name == "nt" and (restarted or args.background))):
         open_log_file()
 
@@ -2956,7 +3141,13 @@ def main() -> None:
         return
 
     api_key = ensure_api_key()
-    models = available_models(refresh=args.refresh_models)
+    if args.refresh_models:
+        models = available_models(refresh=True)
+    else:
+        preload_models()
+        models = available_models()
+        threading.Thread(target=available_models, kwargs={"refresh": True}, daemon=True).start()
+    refresh_autostart()
     METRICS = Metrics(None if args.no_save else STATS_FILE)
     restored = METRICS.load()
     PRICING = Pricing(PRICING_FILE)

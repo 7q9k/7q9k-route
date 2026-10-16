@@ -48,7 +48,7 @@ def chunk(content=None, *, finish=None, usage=None, tool=None):
 
 
 def fake_upstream(events, fail_after=None):
-    def opener(req, model):
+    def opener(req, model, timeout=None):
         def gen():
             for i, event in enumerate(events):
                 if fail_after is not None and i == fail_after:

@@ -444,7 +444,7 @@
         <section class="section">
           <div class="section-head"><h2>Server</h2></div>
           <ul class="form">
-            <li><div class="k"><b>Port</b><span>Default 8787</span></div><div><input class="input" id="setPort" inputmode="numeric" aria-label="Port"></div></li>
+            <li><div class="k"><b>Port</b><span>1024 to 65535, default 8787</span></div><div><input class="input" id="setPort" inputmode="numeric" aria-label="Port"></div></li>
             <li><div class="k"><b>Open dashboard on start</b><span>Opens your browser when the app starts</span></div><div><button class="switch" role="switch" id="setBrowser" aria-checked="false" aria-label="Open dashboard on start"></button></div></li>
             <li id="rowAutostart" hidden><div class="k"><b>Start with Windows</b><span>Runs in the background after login</span></div><div><button class="switch" role="switch" id="setAutostart" aria-checked="false" aria-label="Start with Windows"></button></div></li>
             <li><div class="k"><b>Data folder</b><span>Key, stats, settings and log</span></div><div class="mono" id="dataDir" style="font-size:13px; overflow-wrap:anywhere">–</div></li>
@@ -544,12 +544,13 @@ function setState(ok){
 }
 const keyText = () => state?.local ? state.api_key : remoteKey;
 const maskKey = k => k ? k.slice(0,11)+'•'.repeat(12)+k.slice(-4) : '–';
-const baseUrl = () => location.origin + '/v1';
+const apiOrigin = () => location.hostname === 'localhost' ? `${location.protocol}//127.0.0.1${location.port ? ':' + location.port : ''}` : location.origin;
+const baseUrl = () => apiOrigin() + '/v1';
 
 function renderAccess(){
   const urls = state.urls || {};
   $('urlOpenai').textContent = baseUrl();
-  $('urlOllama').textContent = location.origin;
+  $('urlOllama').textContent = apiOrigin();
   const lan = urls.network ? urls.network + '/v1' : null;
   $('rowLan').hidden = !lan || location.origin === urls.network;
   if (lan) $('urlLan').textContent = lan;
@@ -572,7 +573,7 @@ function renderAccess(){
 
 function renderSnippet(){
   if (!state) return;
-  const base=location.origin, k=keyText()||'', m=state.default_model;
+  const base=apiOrigin(), k=keyText()||'', m=state.default_model;
   const shown = revealed && k ? k : '<API key>';
   const s = {
     app:`Provider / type   OpenAI compatible\nBase URL          ${base}/v1\nAPI key           ${shown}\nModel             ${m}\nProtocol          Chat Completions or Responses (both work)`,
@@ -830,7 +831,18 @@ function showGate(msg){
 $('gateForm').onsubmit = async ev => { ev.preventDefault(); remoteKey=$('gateInput').value.trim(); store.set(remoteKey); await loadState(); refreshStats(); };
 $('logout').onclick = () => { remoteKey=''; store.set(''); showGate(''); };
 
-async function copy(text){ try{ await navigator.clipboard.writeText(text.trim()); toast('Copied'); }catch{ toast('Copy failed. Please select it manually.'); } }
+async function copy(text){
+  text = String(text || '').trim();
+  try{
+    if (navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(text); toast('Copied'); return; }
+  }catch{}
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.append(ta); ta.select();
+  let ok = false; try{ ok = document.execCommand('copy'); }catch{}
+  ta.remove();
+  toast(ok ? 'Copied' : 'Copy failed. Please select it manually.');
+}
 $$('[data-copy-text]').forEach(b=>b.onclick=()=>copy($(b.dataset.copyText).textContent));
 $$('[data-copy-key]').forEach(b=>b.onclick=()=>copy(keyText()||''));
 $('btnSnip').onclick=()=>copy($('snip').dataset.copy||$('snip').textContent);
