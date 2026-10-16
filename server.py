@@ -19,6 +19,7 @@ OpenCode's own client requests; availability can change at any time.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import secrets
 import string
@@ -809,6 +810,204 @@ def merge_deltas(events: Iterator[dict[str, Any]], model: str) -> dict[str, Any]
     }
 
 
+# ---------------------------------------------------------------- ollama bridge
+
+
+_CALL_ID_SEQ = itertools.count(1)
+
+
+def _json_obj(text: Any) -> dict[str, Any]:
+    try:
+        value = json.loads(text if isinstance(text, str) and text.strip() else "{}")
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _ollama_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"
+
+
+def _ollama_usage(usage: dict[str, Any] | None) -> tuple[int, int]:
+    usage = usage if isinstance(usage, dict) else {}
+    return int(usage.get("prompt_tokens", 0) or 0), int(
+        usage.get("completion_tokens", 0) or 0
+    )
+
+
+def _ollama_details() -> dict[str, Any]:
+    return {
+        "format": "api",
+        "family": "opencode-free",
+        "families": ["opencode-free"],
+        "parameter_size": "",
+        "parent_model": "",
+        "quantization_level": "",
+    }
+
+
+def _ollama_model_entries() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": model,
+            "model": model,
+            "modified_at": _ollama_now(),
+            "size": 0,
+            "digest": "oc-free-" + model,
+            "details": _ollama_details(),
+            "capabilities": ["completion", "streaming", "tools"],
+        }
+        for model in available_models()
+    ]
+
+
+def normalize_model_name(name: Any) -> str:
+    text = str(name or "").strip()
+    if "/" in text:
+        provider, text = text.split("/", 1)
+        if provider != "opencode":
+            raise ProxyError(
+                "only models from the 'opencode' provider are supported "
+                "(e.g. 'opencode/big-pickle').",
+                400,
+            )
+    if text.endswith(":latest"):
+        text = text[: -len(":latest")]
+    return text or DEFAULT_MODEL
+
+
+def ollama_to_openai_messages(messages: list[Any]) -> list[dict[str, Any]]:
+    """Convert Ollama chat messages (incl. tool_calls / tool results)."""
+    result: list[dict[str, Any]] = []
+    ids_by_name: dict[str, list[str]] = {}
+    fifo_ids: list[str] = []
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "")
+        if role == "assistant" and isinstance(message.get("tool_calls"), list):
+            calls = []
+            for call in message["tool_calls"]:
+                function = call.get("function") or {}
+                name = str(function.get("name") or "")
+                arguments = function.get("arguments") or "{}"
+                if not isinstance(arguments, str):
+                    arguments = json.dumps(arguments, separators=(",", ":"))
+                call_id = f"call_{next(_CALL_ID_SEQ)}"
+                calls.append(
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": name, "arguments": arguments},
+                    }
+                )
+                ids_by_name.setdefault(name, []).append(call_id)
+                fifo_ids.append(call_id)
+            item: dict[str, Any] = {"role": "assistant", "tool_calls": calls}
+            content = message.get("content")
+            if content:
+                item["content"] = content
+            result.append(item)
+            continue
+        if role == "tool":
+            call_id = message.get("tool_call_id")
+            if not call_id:
+                name = str(message.get("tool_name") or message.get("name") or "")
+                if name and ids_by_name.get(name):
+                    call_id = ids_by_name[name].pop(0)
+                elif fifo_ids:
+                    call_id = fifo_ids.pop(0)
+                else:
+                    call_id = f"call_{next(_CALL_ID_SEQ)}"
+            result.append(
+                {"role": "tool", "tool_call_id": call_id, "content": message.get("content") or ""}
+            )
+            continue
+        result.append({"role": role or "user", "content": message.get("content") or ""})
+    return result
+
+
+def ollama_options(req: dict[str, Any]) -> dict[str, Any]:
+    """Build an OpenAI chat request out of an Ollama /api/chat|generate body."""
+    options = req.get("options") if isinstance(req.get("options"), dict) else {}
+    openai_req: dict[str, Any] = {
+        "model": req.get("model"),
+        "stream": bool(req.get("stream")),
+    }
+    for key in ("temperature", "top_p", "seed"):
+        if options.get(key) is not None:
+            openai_req[key] = options[key]
+    if options.get("num_predict") is not None:
+        openai_req["max_tokens"] = options["num_predict"]
+    if options.get("stop") is not None:
+        openai_req["stop"] = (
+            options["stop"] if isinstance(options["stop"], list) else [options["stop"]]
+        )
+    if req.get("format") == "json":
+        openai_req["response_format"] = {"type": "json_object"}
+    if isinstance(req.get("tools"), list) and req["tools"]:
+        tools = []
+        for tool in req["tools"]:
+            if not isinstance(tool, dict):
+                continue
+            function = dict(tool.get("function") or {})
+            if "parameters" not in function and "arguments" in function:
+                function["parameters"] = function["arguments"]
+            tools.append({"type": "function", "function": function})
+        if tools:
+            openai_req["tools"] = tools
+            if req.get("tool_choice") is not None:
+                openai_req["tool_choice"] = req["tool_choice"]
+    return openai_req
+
+
+def ollama_chat_response(completion: dict[str, Any], include_thinking: bool = False) -> dict[str, Any]:
+    message = completion["choices"][0]["message"]
+    content = message.get("content") or ""
+    out_message: dict[str, Any] = {"role": "assistant", "content": content}
+    if include_thinking and message.get("reasoning"):
+        out_message["thinking"] = str(message["reasoning"])
+    raw_calls = message.get("tool_calls") or []
+    if raw_calls:
+        out_message["tool_calls"] = [
+            {
+                "function": {
+                    "name": call["function"]["name"],
+                    "arguments": _json_obj(call["function"].get("arguments")),
+                }
+            }
+            for call in raw_calls
+        ]
+    prompt_count, eval_count = _ollama_usage(completion.get("usage"))
+    return {
+        "model": completion.get("model"),
+        "created_at": _ollama_now(),
+        "message": out_message,
+        "done_reason": completion["choices"][0].get("finish_reason") or "stop",
+        "done": True,
+        "total_duration": 0,
+        "load_duration": 0,
+        "prompt_eval_count": prompt_count,
+        "eval_count": eval_count,
+    }
+
+
+def ollama_generate_response(completion: dict[str, Any]) -> dict[str, Any]:
+    message = completion["choices"][0]["message"]
+    prompt_count, eval_count = _ollama_usage(completion.get("usage"))
+    return {
+        "model": completion.get("model"),
+        "created_at": _ollama_now(),
+        "response": message.get("content") or "",
+        "done_reason": completion["choices"][0].get("finish_reason") or "stop",
+        "done": True,
+        "total_duration": 0,
+        "load_duration": 0,
+        "prompt_eval_count": prompt_count,
+        "eval_count": eval_count,
+    }
+
+
 # ---------------------------------------------------------------- API key
 
 
@@ -879,10 +1078,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         if path == "/health":
             self._send_json(200, {"ok": True})
             return
-        if path == "/v1/models":
-            if not self._authorized():
-                self._unauthorized()
-                return
+        if path in {"/v1/models", "/api/v1/models"}:
             try:
                 models = available_models()
             except Exception as exc:  # noqa: BLE001
@@ -904,76 +1100,381 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if path == "/api/tags":
+            try:
+                self._send_json(200, {"models": _ollama_model_entries()})
+            except Exception as exc:  # noqa: BLE001
+                self._send_error_json(502, f"model discovery failed: {exc}")
+            return
+        if path == "/api/ps":
+            self._send_json(
+                200,
+                {
+                    "models": [
+                        {
+                            "name": entry["name"],
+                            "model": entry["model"],
+                            "size": 0,
+                            "size_vram": 0,
+                            "digest": entry["digest"],
+                            "details": entry["details"],
+                            "expires_at": "0001-01-01T00:00:00Z",
+                        }
+                        for entry in _ollama_model_entries()
+                    ]
+                },
+            )
+            return
+        if path in {"/api/version", "/version"}:
+            self._send_json(200, {"version": "oc-free-api/1.0.0"})
+            return
+        if path in {"/v1/props", "/props"}:
+            try:
+                models = available_models()
+            except Exception:  # noqa: BLE001
+                models = list(FALLBACK_MODELS)
+            model = models[0] if models else DEFAULT_MODEL
+            self._send_json(
+                200,
+                {
+                    "model": model,
+                    "family": "opencode-free",
+                    "prompt": "",
+                    "n_keep": 0,
+                    "n_discard": 0,
+                    "n_predict": -1,
+                    "n_ctx": 131072,
+                    "temperature": 1.0,
+                    "top_k": 40,
+                    "top_p": 0.95,
+                    "total_slots": 1,
+                    "modalities": {"vision": False, "audio_in": False, "audio_out": False},
+                    "default_generation_settings": {
+                        "id": "slot-0",
+                        "port": 0,
+                        "model": model,
+                        "n_predict": -1,
+                        "n_keep": 0,
+                        "truncation": 50,
+                        "n_ctx": 131072,
+                    },
+                },
+            )
+            return
         self._send_error_json(404, f"unknown path: {path}")
 
     # ---- POST
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
-        if path not in {"/v1/chat/completions", "/chat/completions"}:
+        if path in {"/v1/chat/completions", "/chat/completions"}:
+            self._post_chat_completions()
+        elif path == "/api/chat":
+            self._post_ollama_chat()
+        elif path == "/api/generate":
+            self._post_ollama_generate()
+        elif path == "/api/show":
+            self._post_ollama_show()
+        else:
             self._send_error_json(404, f"unknown path: {path}")
-            return
-        if not self._authorized():
-            self._unauthorized()
-            return
 
+    def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""
         try:
             req = json.loads(raw.decode("utf-8")) if raw else {}
         except json.JSONDecodeError as exc:
-            self._send_error_json(400, f"invalid JSON body: {exc}")
-            return
+            raise ProxyError(f"invalid JSON body: {exc}", 400) from exc
         if not isinstance(req, dict):
-            self._send_error_json(400, "request body must be a JSON object")
-            return
+            raise ProxyError("request body must be a JSON object", 400)
+        return req
 
-        model = str(req.get("model") or DEFAULT_MODEL)
-        if "/" in model:
-            provider, model = model.split("/", 1)
-            if provider != "opencode":
-                self._send_error_json(
-                    400,
-                    "only models from the 'opencode' provider are supported "
-                    "(e.g. 'opencode/big-pickle').",
-                )
-                return
+    def _resolve_model(self, name: Any) -> str:
+        model = normalize_model_name(name)
         try:
-            models = available_models() if model else []
+            models = available_models()
         except Exception:  # noqa: BLE001
             models = list(FALLBACK_MODELS)
         if models and model not in models:
-            self._send_error_json(
-                404,
+            raise ProxyError(
                 f"model '{model}' is not an available free model. "
-                f"Call GET /v1/models for the current list ({', '.join(models)})",
+                f"Call GET /v1/models or /api/tags for the current list "
+                f"({', '.join(models)})",
+                404,
             )
+        return model
+
+    def _open_upstream(self, req: dict[str, Any], model: str) -> Iterator[dict[str, Any]]:
+        if uses_responses_api(model):
+            events = upstream_stream(RESPONSES_URL, build_responses_request(req))
+            return responses_events_to_deltas(events)
+        return upstream_stream(DIRECT_URL, build_chat_request({**req, "model": model}))
+
+    def _post_chat_completions(self) -> None:
+        if not self._authorized():
+            self._unauthorized()
             return
-
-        want_stream = bool(req.get("stream"))
-
         try:
-            if uses_responses_api(model):
-                upstream_body = build_responses_request(req)
-                events = upstream_stream(RESPONSES_URL, upstream_body)
-                deltas = responses_events_to_deltas(events)
+            req = self._read_json()
+            model = self._resolve_model(req.get("model"))
+            deltas = self._open_upstream(req, model)
+            if bool(req.get("stream")):
+                self._handle_streaming(deltas, model)
             else:
-                upstream_body = build_chat_request({**req, "model": model})
-                events = upstream_stream(DIRECT_URL, upstream_body)
-                deltas = events
+                self._send_json(200, merge_deltas(deltas, model))
         except ProxyError as exc:
             self._send_error_json(exc.status_code, str(exc))
-            return
 
-        if want_stream:
-            self._handle_streaming(deltas, model)
-        else:
-            try:
+    # ---- Ollama API
+
+    def _post_ollama_chat(self) -> None:
+        try:
+            req = self._read_json()
+            model = self._resolve_model(req.get("model"))
+            openai_req = ollama_options(req)
+            openai_req["messages"] = ollama_to_openai_messages(
+                req.get("messages") or []
+            )
+            deltas = self._open_upstream(openai_req, model)
+            include_thinking = bool(req.get("think"))
+            if bool(req.get("stream")):
+                self._write_header_stream("application/x-ndjson")
+                self._ollama_chat_stream(deltas, model, include_thinking)
+            else:
                 completion = merge_deltas(deltas, model)
-            except ProxyError as exc:
-                self._send_error_json(exc.status_code, str(exc))
-                return
-            self._send_json(200, completion)
+                self._send_json(200, ollama_chat_response(completion, include_thinking))
+        except ProxyError as exc:
+            self._send_json(
+                exc.status_code,
+                {"error": {"message": str(exc), "type": "oc_free_api_error"}},
+            )
+
+    def _post_ollama_generate(self) -> None:
+        try:
+            req = self._read_json()
+            model = self._resolve_model(req.get("model"))
+            if req.get("raw"):
+                prompt = str(req.get("prompt") or "")
+                messages = [{"role": "user", "content": prompt}]
+            else:
+                messages = [
+                    m
+                    for m in (
+                        (
+                            {"role": "system", "content": str(req.get("system") or "")}
+                            if req.get("system")
+                            else None
+                        ),
+                        {"role": "user", "content": str(req.get("prompt") or "")},
+                    )
+                    if m
+                ]
+            openai_req = ollama_options(req)
+            openai_req["messages"] = messages
+            deltas = self._open_upstream(openai_req, model)
+            if bool(req.get("stream")):
+                self._write_header_stream("application/x-ndjson")
+                self._ollama_generate_stream(deltas, model, bool(req.get("think")))
+            else:
+                completion = merge_deltas(deltas, model)
+                self._send_json(200, ollama_generate_response(completion))
+        except ProxyError as exc:
+            self._send_json(
+                exc.status_code,
+                {"error": {"message": str(exc), "type": "oc_free_api_error"}},
+            )
+
+    def _post_ollama_show(self) -> None:
+        try:
+            req = self._read_json()
+        except ProxyError as exc:
+            self._send_json(
+                exc.status_code,
+                {"error": {"message": str(exc), "type": "oc_free_api_error"}},
+            )
+            return
+        name = normalize_model_name(req.get("name") or req.get("model"))
+        response: dict[str, Any] = {
+            "name": name,
+            "model": name,
+            "modified_at": _ollama_now(),
+            "license": "personal-use (see repository)",
+            "modelfile": f"FROM {name}",
+            "parameters": "",
+            "template": "{{ .Prompt }}",
+            "details": _ollama_details(),
+            "capabilities": ["completion", "streaming", "tools"],
+            "model_info": {
+                "general.architecture": "opencode-free",
+                "general.name": name,
+                "general.parameter_count": 0,
+                "general.quantization_level": "",
+            },
+        }
+        self._send_json(200, response)
+
+    def _write_header_stream(self, content_type: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+
+    def _write_ndjson(self, payload: dict[str, Any]) -> bool:
+        try:
+            data = (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+            self.wfile.write(f"{len(data):x}\r\n".encode() + data + b"\r\n")
+            self.wfile.flush()
+            return True
+        except OSError:
+            return False
+
+    def _ollama_chat_stream(
+        self, deltas: Iterator[dict[str, Any]], model: str, include_thinking: bool
+    ) -> None:
+        created = _ollama_now()
+        calls: dict[int, dict[str, Any]] = {}
+        finish = "stop"
+        usage: dict[str, Any] | None = None
+        try:
+            saw = False
+            for event in deltas:
+                saw = True
+                if isinstance(event.get("usage"), dict):
+                    usage = event["usage"]
+                for choice in event.get("choices") or []:
+                    if choice.get("finish_reason"):
+                        finish = choice["finish_reason"]
+                    delta = choice.get("delta") or {}
+                    if delta.get("content"):
+                        if not self._write_ndjson(
+                            {
+                                "model": model,
+                                "created_at": created,
+                                "message": {"role": "assistant", "content": str(delta["content"])},
+                                "done": False,
+                            }
+                        ):
+                            return
+                    if include_thinking and delta.get("reasoning_content"):
+                        if not self._write_ndjson(
+                            {
+                                "model": model,
+                                "created_at": created,
+                                "message": {
+                                    "role": "assistant",
+                                    "thinking": str(delta["reasoning_content"]),
+                                },
+                                "done": False,
+                            }
+                        ):
+                            return
+                    for raw_call in delta.get("tool_calls") or []:
+                        index = int(raw_call.get("index", 0) or 0)
+                        item = calls.setdefault(index, {"name": "", "arguments": ""})
+                        function = raw_call.get("function") or {}
+                        if function.get("name"):
+                            item["name"] = str(function["name"])
+                        item["arguments"] += str(function.get("arguments") or "")
+            if not saw:
+                raise ProxyError("upstream returned no events.")
+            if finish == "content_filter":
+                raise ProxyError("upstream blocked the response by content filter.", 400)
+            ollama_calls = [
+                {
+                    "function": {
+                        "name": item["name"],
+                        "arguments": _json_obj(item["arguments"]),
+                    }
+                }
+                for _, item in sorted(calls.items())
+                if item["name"]
+            ]
+            message: dict[str, Any] = {"role": "assistant", "content": ""}
+            if ollama_calls:
+                message["tool_calls"] = ollama_calls
+            chunk: dict[str, Any] = {
+                "model": model,
+                "created_at": created,
+                "message": message,
+                "done": True,
+                "done_reason": "tool_calls" if ollama_calls else finish,
+            }
+            prompt_count, eval_count = _ollama_usage(usage)
+            chunk["prompt_eval_count"] = prompt_count
+            chunk["eval_count"] = eval_count
+            self._write_ndjson(chunk)
+        except (ProxyError, BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            try:
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+            except OSError:
+                pass
+            self.close_connection = True
+
+    def _ollama_generate_stream(
+        self, deltas: Iterator[dict[str, Any]], model: str, include_thinking: bool
+    ) -> None:
+        created = _ollama_now()
+        finish = "stop"
+        usage: dict[str, Any] | None = None
+        try:
+            saw = False
+            for event in deltas:
+                saw = True
+                if isinstance(event.get("usage"), dict):
+                    usage = event["usage"]
+                for choice in event.get("choices") or []:
+                    if choice.get("finish_reason"):
+                        finish = choice["finish_reason"]
+                    delta = choice.get("delta") or {}
+                    if delta.get("content"):
+                        if not self._write_ndjson(
+                            {
+                                "model": model,
+                                "created_at": created,
+                                "response": str(delta["content"]),
+                                "done": False,
+                            }
+                        ):
+                            return
+                    if include_thinking and delta.get("reasoning_content"):
+                        if not self._write_ndjson(
+                            {
+                                "model": model,
+                                "created_at": created,
+                                "thinking": str(delta["reasoning_content"]),
+                                "done": False,
+                            }
+                        ):
+                            return
+            if not saw:
+                raise ProxyError("upstream returned no events.")
+            if finish == "content_filter":
+                raise ProxyError("upstream blocked the response by content filter.", 400)
+            prompt_count, eval_count = _ollama_usage(usage)
+            self._write_ndjson(
+                {
+                    "model": model,
+                    "created_at": created,
+                    "response": "",
+                    "done": True,
+                    "done_reason": finish,
+                    "prompt_eval_count": prompt_count,
+                    "eval_count": eval_count,
+                }
+            )
+        except (ProxyError, BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            try:
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+            except OSError:
+                pass
+            self.close_connection = True
 
     # ---- streaming response
 

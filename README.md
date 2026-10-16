@@ -29,8 +29,25 @@ Konsole angezeigt. Optionen:
 | Pfad | Beschreibung |
 |---|---|
 | `GET /health` | Liveness-Check (ohne Auth) |
-| `GET /v1/models` | aktuelle Liste der freien Modelle |
-| `POST /v1/chat/completions` | OpenAI Chat Completions (Streaming **und** non-Streaming, Tools) |
+| `GET /v1/models` · `GET /api/v1/models` | Modell-Liste (OpenAI-Format, ohne Auth) |
+| `GET /api/tags` · `GET /api/ps` · `POST /api/show` | **Ollama**-Endpoints |
+| `POST /api/chat` · `POST /api/generate` | **Ollama** Chat/Generate (Stream + Tools, kein Auth) |
+| `GET /version` · `GET /v1/props` · `GET /props` | **LM Studio / llama.cpp** Fingerabdruck-Endpoints |
+| `POST /v1/chat/completions` | OpenAI Chat Completions (Stream **und** non-Stream, Tools) |
+
+### Ollama-kompatible Tools / LM Studio
+
+Der Server emuliert die Endpunkte, mit denen Clients Modelle entdecken — Listener
+einfach auf `http://127.0.0.1:8787` zeigen lassen (kein Suffix, kein Key nötig für
+`/api/*`):
+
+- **Ollama-Clients** (Open WebUI, Continue mit Ollama-Provider, …): Base URL
+  `http://127.0.0.1:8787` — Modelle erscheinen wie lokal installierte.
+- **LM Studio / llama.cpp-Clients**: OpenAI-Konfiguration `http://127.0.0.1:8787/v1`
+  plus eigenem Key; die Probe-Endpunkte (`/version`, `/props`) antworten ebenfalls.
+- **Agent-Fähigkeit**: Ollama-`/api/chat` unterstützt Tool Calls inklusive
+  Tool-Rückgabe (Feld `tool_name`) und konvertiert `options` (`.temperature`,
+  `.num_predict`, `top_p`, `stop`, `seed`) sowie `format: "json"`.
 
 ## Client-Konfiguration (universell für OpenAI-kompatible Tools)
 
