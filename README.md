@@ -1,3 +1,5 @@
+<img src="assets/icon.png" width="64" alt="">
+
 # oc-free-api
 
 Local server that exposes OpenCode Zen's free models as an OpenAI- and Ollama-compatible API, with a web dashboard. Python standard library only. Personal use.
@@ -6,7 +8,7 @@ Local server that exposes OpenCode Zen's free models as an OpenAI- and Ollama-co
 
 From [Releases](https://github.com/7q9k/oc-free-api/releases):
 
-- `oc-free-api.exe`: Windows, no Python needed. Put it in its own folder and double-click it.
+- `oc-free-api-<version>.exe`: Windows, no Python needed. Double-click it. Your key, stats and settings are stored in `%LOCALAPPDATA%\oc-free-api`, not next to the exe.
 - `oc-free-api-<version>-python.zip`: any OS with Python 3.10+. Unzip and run `python server.py`.
 
 ## Run
@@ -15,7 +17,7 @@ Double-click `oc-free-api.exe`. A small window shows the dashboard address, the 
 
 Everything else happens in the dashboard (http://localhost:8787): who can connect, port, start with Windows, API key, restart and stop.
 
-Base URL for apps: `http://localhost:8787/v1` (also works without `/v1`). The API key is in `api-key.txt`.
+Base URL for apps: `http://localhost:8787/v1` (also works without `/v1`). The API key is shown in the dashboard and stored in `api-key.txt` in the data folder.
 
 Command line options (optional): `--port`, `--host`, `--key`, `--no-browser`, `--background`, `--no-save`.
 

@@ -8,6 +8,7 @@ import itertools
 import json
 import os
 import secrets
+import shutil
 import socket
 import string
 import subprocess
@@ -24,14 +25,23 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 RES_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))
 DASHBOARD_FILE = RES_DIR / "dashboard.html"
 ASSETS_DIR = RES_DIR / "assets"
-DATA_DIR = Path(os.environ.get("OCFREE_DATA_DIR") or BASE_DIR).resolve()
+def default_data_dir() -> Path:
+    if os.environ.get("OCFREE_DATA_DIR"):
+        return Path(os.environ["OCFREE_DATA_DIR"])
+    if FROZEN and os.name == "nt":
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "oc-free-api"
+    return BASE_DIR
+
+
+DATA_DIR = default_data_dir().resolve()
+DATA_FILES = ("api-key.txt", "stats.json", "config.json", "pricing.json", "models.json", "server.log", "server.log.1")
 STATS_FILE = DATA_DIR / "stats.json"
 PRICING_FILE = DATA_DIR / "pricing.json"
 CONFIG_FILE = DATA_DIR / "config.json"
@@ -1937,6 +1947,7 @@ def settings_payload() -> dict[str, Any]:
         "open_browser": bool(config["open_browser"]),
         "autostart": autostart_enabled(),
         "data_dir": str(DATA_DIR),
+        "can_open_folder": hasattr(os, "startfile"),
         "running": {"host": BOUND_HOST, "port": BOUND_PORT},
         "restart_required": wanted_host != BOUND_HOST or wanted_port != BOUND_PORT,
         "overridden": bool(CLI_HOST or CLI_PORT),
@@ -2231,6 +2242,7 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/api/dashboard/reset"): ("admin", "_post_reset_stats"),
     ("POST", "/api/dashboard/key"): ("admin", "_post_new_key"),
     ("POST", "/api/dashboard/stop"): ("admin", "_post_stop_server"),
+    ("POST", "/api/dashboard/open-folder"): ("admin", "_post_open_folder"),
 }
 
 INFERENCE_PATHS = frozenset(
@@ -2757,6 +2769,13 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         OpenAICompatibleHandler.api_key = new_key
         self._send_json(200, {"ok": True, "api_key": new_key})
 
+    def _post_open_folder(self) -> None:
+        if not hasattr(os, "startfile"):
+            raise ProxyError("opening folders is only supported on Windows.", 400)
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(DATA_DIR))
+        self._send_json(200, {"ok": True, "path": str(DATA_DIR)})
+
     def _post_stop_server(self) -> None:
         self._send_json(200, {"ok": True, "stopping": True})
         if SERVER is not None:
@@ -3062,6 +3081,25 @@ def _writable(path: Path) -> bool:
         return False
 
 
+def migrate_legacy_files(source: Path, target: Path) -> list[str]:
+    moved: list[str] = []
+    try:
+        if source.resolve() == target.resolve():
+            return moved
+    except OSError:
+        return moved
+    for name in DATA_FILES:
+        old, new = source / name, target / name
+        if old.is_file() and not new.exists():
+            try:
+                target.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(old), str(new))
+                moved.append(name)
+            except OSError:
+                pass
+    return moved
+
+
 def _ensure_data_dir() -> None:
     if _writable(DATA_DIR):
         return
@@ -3112,6 +3150,8 @@ def _main() -> None:
     if show_window and not _windows_console_open():
         show_window = False
     _ensure_data_dir()
+    if FROZEN and not os.environ.get("OCFREE_DATA_DIR"):
+        migrate_legacy_files(BASE_DIR, DATA_DIR)
     if not show_window and (sys.stdout is None or (os.name == "nt" and (restarted or args.background))):
         open_log_file()
 

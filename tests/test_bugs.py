@@ -145,6 +145,34 @@ class StateTests(unittest.TestCase):
             self.assertEqual(server.DATA_DIR, (Path(tmp) / "oc-free-api").resolve())
             self.assertEqual(server.KEY_FILE.parent, server.DATA_DIR)
 
+    def test_exe_data_lives_in_local_appdata(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(server, "FROZEN", True), \
+                mock.patch.object(server.os, "name", "nt"), \
+                mock.patch.dict(server.os.environ, {"LOCALAPPDATA": tmp}, clear=False):
+            server.os.environ.pop("OCFREE_DATA_DIR", None)
+            self.assertEqual(server.default_data_dir(), Path(tmp) / "oc-free-api")
+        with mock.patch.dict(server.os.environ, {"OCFREE_DATA_DIR": "X:/custom"}):
+            self.assertEqual(server.default_data_dir(), Path("X:/custom"))
+
+    def test_legacy_files_are_moved_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old, new = Path(tmp) / "Downloads", Path(tmp) / "AppData" / "oc-free-api"
+            old.mkdir()
+            (old / "api-key.txt").write_text("sk-old", encoding="utf-8")
+            (old / "stats.json").write_text("{}", encoding="utf-8")
+            (old / "unrelated.txt").write_text("keep", encoding="utf-8")
+            new.mkdir(parents=True)
+            (new / "stats.json").write_text('{"newer": true}', encoding="utf-8")
+            moved = server.migrate_legacy_files(old, new)
+            self.assertEqual(moved, ["api-key.txt"])
+            self.assertEqual((new / "api-key.txt").read_text(encoding="utf-8"), "sk-old")
+            self.assertFalse((old / "api-key.txt").exists())
+            self.assertTrue((old / "stats.json").exists())
+            self.assertEqual((new / "stats.json").read_text(encoding="utf-8"), '{"newer": true}')
+            self.assertTrue((old / "unrelated.txt").exists())
+            self.assertEqual(server.migrate_legacy_files(new, new), [])
+
     def test_port_available(self):
         import socket
         busy = socket.socket()

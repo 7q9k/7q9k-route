@@ -429,7 +429,7 @@
 
     <div class="page" data-page="settings" hidden>
       <h1 class="title">Settings</h1>
-      <p class="lead" id="settingsLead">Changes are saved to config.json next to the server.</p>
+      <p class="lead" id="settingsLead">Changes are saved in the data folder below.</p>
       <div id="settingsLocked" hidden><p class="hint">Settings can only be changed on the computer that runs the server.</p></div>
       <div id="settingsForm">
         <div class="notice warn" data-restart-notice hidden><span><b>Restart needed</b> to apply the new access or port.</span><button class="btn" data-restart>Restart now</button></div>
@@ -447,7 +447,7 @@
             <li><div class="k"><b>Port</b><span>1024 to 65535, default 8787</span></div><div><input class="input" id="setPort" inputmode="numeric" aria-label="Port"></div></li>
             <li><div class="k"><b>Open dashboard on start</b><span>Opens your browser when the app starts</span></div><div><button class="switch" role="switch" id="setBrowser" aria-checked="false" aria-label="Open dashboard on start"></button></div></li>
             <li id="rowAutostart" hidden><div class="k"><b>Start with Windows</b><span>Runs in the background after login</span></div><div><button class="switch" role="switch" id="setAutostart" aria-checked="false" aria-label="Start with Windows"></button></div></li>
-            <li><div class="k"><b>Data folder</b><span>Key, stats, settings and log</span></div><div class="mono" id="dataDir" style="font-size:13px; overflow-wrap:anywhere">–</div></li>
+            <li><div class="k"><b>Data folder</b><span>Key, stats, settings and log</span></div><div><div class="mono" id="dataDir" style="font-size:13px; overflow-wrap:anywhere">–</div><button class="text-btn" id="btnOpenFolder" hidden style="margin-top:4px">Open folder</button></div></li>
           </ul>
           <div class="save-bar"><button class="btn primary" id="btnSaveSettings">Save settings</button></div>
         </section>
@@ -780,6 +780,7 @@ function renderSettings(){
   $('rowAutostart').hidden = s.autostart === null;
   $('setAutostart').setAttribute('aria-checked', !!s.autostart);
   $('dataDir').textContent = s.data_dir;
+  $('btnOpenFolder').hidden = !s.can_open_folder;
   $$('[data-restart-notice]').forEach(n=>n.hidden=!s.restart_required);
   $('overrideNotice').hidden = !s.overridden;
   $('restartNotice').hidden = !s.restart_required;
@@ -812,6 +813,7 @@ async function restart(btn){
   });
 }
 $$('[data-restart]').forEach(b => b.onclick = () => restart(b));
+$('btnOpenFolder').onclick = e => busy(e.currentTarget, async () => { await api('/api/dashboard/open-folder', {}); });
 
 let routed = false;
 async function loadState(){
