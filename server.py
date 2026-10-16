@@ -12,6 +12,7 @@ Endpoints (see README for the full list):
     GET  /health                -> liveness check (no auth)
     GET  /v1/models             -> discovered free models
     POST /v1/chat/completions   -> chat completions (stream + non-stream)
+    POST /v1/responses          -> OpenAI Responses API (stateless, stream + non-stream)
     POST /api/chat|generate     -> Ollama-compatible chat / generate
 
 Access: requests from the server machine itself need no key; requests
@@ -856,6 +857,344 @@ def merge_deltas(events: Iterator[dict[str, Any]], model: str) -> dict[str, Any]
     }
 
 
+# ---------------------------------------------------------------- responses API (client side)
+#
+# Clients that speak the OpenAI Responses API (POST /v1/responses) are
+# translated to a chat request, sent through the normal upstream path and
+# the chat deltas are turned back into Responses objects / SSE events.
+# Stateless: previous_response_id is not supported, clients send the full
+# input every time (store=false), which is what agent clients do anyway.
+
+
+def _responses_parts_to_chat(content: Any) -> Any:
+    """Responses message content -> chat message content (string or parts)."""
+    if not isinstance(content, list):
+        return _message_text(content)
+    parts: list[dict[str, Any]] = []
+    for part in content:
+        if isinstance(part, str):
+            parts.append({"type": "text", "text": part})
+            continue
+        if not isinstance(part, dict):
+            continue
+        kind = str(part.get("type") or "")
+        if kind in {"input_text", "output_text", "text", "summary_text"}:
+            parts.append({"type": "text", "text": str(part.get("text") or "")})
+        elif kind == "refusal":
+            parts.append({"type": "text", "text": str(part.get("refusal") or "")})
+        elif kind == "input_image":
+            url = part.get("image_url") or ""
+            if isinstance(url, dict):
+                url = url.get("url") or ""
+            if url:
+                parts.append({"type": "image_url", "image_url": {"url": str(url)}})
+    if all(p["type"] == "text" for p in parts):
+        return "".join(p["text"] for p in parts)
+    return parts
+
+
+def _tool_output_text(output: Any) -> str:
+    if isinstance(output, str):
+        return output
+    if isinstance(output, list):
+        return _message_text(output)
+    return json.dumps(output) if output is not None else ""
+
+
+def responses_to_chat_request(req: dict[str, Any]) -> dict[str, Any]:
+    """Translate a Responses API request body into a chat-completions request."""
+    if req.get("previous_response_id"):
+        raise ProxyError(
+            "previous_response_id is not supported (stateless proxy); "
+            "send the full conversation in 'input' and set store=false.",
+            400,
+        )
+    messages: list[dict[str, Any]] = []
+    if req.get("instructions"):
+        messages.append({"role": "system", "content": str(req["instructions"])})
+
+    raw_input = req.get("input")
+    items = [{"role": "user", "content": raw_input}] if isinstance(raw_input, str) else raw_input
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "message")
+        if kind == "message":
+            role = str(item.get("role") or "user")
+            role = "system" if role == "developer" else role
+            messages.append({"role": role, "content": _responses_parts_to_chat(item.get("content"))})
+        elif kind == "function_call":
+            call = {
+                "id": str(item.get("call_id") or item.get("id") or ""),
+                "type": "function",
+                "function": {
+                    "name": str(item.get("name") or ""),
+                    "arguments": str(item.get("arguments") or "{}"),
+                },
+            }
+            last = messages[-1] if messages else None
+            if last and last.get("role") == "assistant" and "tool_calls" in last:
+                last["tool_calls"].append(call)
+            elif last and last.get("role") == "assistant" and not last.get("tool_calls"):
+                last["tool_calls"] = [call]
+            else:
+                messages.append({"role": "assistant", "content": None, "tool_calls": [call]})
+        elif kind == "function_call_output":
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": str(item.get("call_id") or ""),
+                    "content": _tool_output_text(item.get("output")),
+                }
+            )
+        # reasoning, item_reference, built-in tool items: nothing to forward
+
+    chat: dict[str, Any] = {"model": req.get("model"), "messages": messages}
+    tools = []
+    for tool in req.get("tools") or []:
+        if isinstance(tool, dict) and tool.get("type") == "function" and tool.get("name"):
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": str(tool["name"]),
+                        "description": str(tool.get("description") or ""),
+                        "parameters": tool.get("parameters") or {"type": "object", "properties": {}},
+                    },
+                }
+            )
+    if tools:
+        chat["tools"] = tools
+        choice = req.get("tool_choice")
+        if isinstance(choice, dict) and choice.get("type") == "function":
+            chat["tool_choice"] = {"type": "function", "function": {"name": str(choice.get("name") or "")}}
+        elif choice in {"auto", "none", "required"}:
+            chat["tool_choice"] = choice
+        if req.get("parallel_tool_calls") is not None:
+            chat["parallel_tool_calls"] = bool(req["parallel_tool_calls"])
+    for key in ("temperature", "top_p", "user"):
+        if req.get(key) is not None:
+            chat[key] = req[key]
+    if req.get("max_output_tokens") is not None:
+        chat["max_tokens"] = req["max_output_tokens"]
+    fmt = (req.get("text") or {}).get("format") if isinstance(req.get("text"), dict) else None
+    if isinstance(fmt, dict):
+        if fmt.get("type") == "json_object":
+            chat["response_format"] = {"type": "json_object"}
+        elif fmt.get("type") == "json_schema":
+            chat["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": str(fmt.get("name") or "output"),
+                    "schema": fmt.get("schema") or {},
+                    "strict": bool(fmt.get("strict", False)),
+                },
+            }
+    return chat
+
+
+def _responses_usage(usage: dict[str, Any] | None) -> dict[str, Any]:
+    u = _usage(usage)
+    return {
+        "input_tokens": u["prompt_tokens"],
+        "input_tokens_details": {"cached_tokens": u["prompt_tokens_details"]["cached_tokens"]},
+        "output_tokens": u["completion_tokens"],
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": u["total_tokens"],
+    }
+
+
+class ResponsesBuilder:
+    """Turns chat-completion deltas into Responses API output items and events.
+
+    feed() returns the SSE events for one delta; the finished response
+    object is available from response() at any time.
+    """
+
+    def __init__(self, model: str, req: dict[str, Any]) -> None:
+        self.id = "resp_" + secrets.token_hex(12)
+        self.created = int(time.time())
+        self.model = model
+        self.req = req
+        self.output: list[dict[str, Any]] = []
+        self.usage: dict[str, Any] | None = None
+        self.status = "in_progress"
+        self.error: dict[str, Any] | None = None
+        self.seq = 0
+        self._open: dict[str, Any] | None = None  # item currently being streamed
+        self._tool_items: dict[int, dict[str, Any]] = {}
+
+    # ---- event helpers
+
+    def _event(self, kind: str, **fields: Any) -> dict[str, Any]:
+        event = {"type": kind, "sequence_number": self.seq, **fields}
+        self.seq += 1
+        return event
+
+    def response(self) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "id": self.id,
+            "object": "response",
+            "created_at": self.created,
+            "status": self.status,
+            "error": self.error,
+            "incomplete_details": None,
+            "instructions": self.req.get("instructions"),
+            "model": self.model,
+            "output": self.output,
+            "parallel_tool_calls": bool(self.req.get("parallel_tool_calls", True)),
+            "previous_response_id": None,
+            "store": False,
+            "temperature": self.req.get("temperature"),
+            "top_p": self.req.get("top_p"),
+            "max_output_tokens": self.req.get("max_output_tokens"),
+            "tool_choice": self.req.get("tool_choice", "auto"),
+            "tools": self.req.get("tools") or [],
+            "text": self.req.get("text") or {"format": {"type": "text"}},
+            "usage": _responses_usage(self.usage) if self.usage is not None else None,
+            "metadata": self.req.get("metadata") or {},
+        }
+        if self.status == "completed":
+            body["output_text"] = "".join(
+                part.get("text", "")
+                for item in self.output
+                if item.get("type") == "message"
+                for part in item.get("content", [])
+            )
+        return body
+
+    def start(self) -> list[dict[str, Any]]:
+        return [
+            self._event("response.created", response=self.response()),
+            self._event("response.in_progress", response=self.response()),
+        ]
+
+    # ---- item lifecycle
+
+    def _close_open(self) -> list[dict[str, Any]]:
+        item, self._open = self._open, None
+        if item is None:
+            return []
+        index = self.output.index(item)
+        events: list[dict[str, Any]] = []
+        if item["type"] == "message":
+            part = item["content"][0]
+            events.append(self._event("response.output_text.done", item_id=item["id"],
+                                      output_index=index, content_index=0, text=part["text"]))
+            events.append(self._event("response.content_part.done", item_id=item["id"],
+                                      output_index=index, content_index=0, part=part))
+        elif item["type"] == "reasoning":
+            summary = item["summary"][0]
+            events.append(self._event("response.reasoning_summary_text.done", item_id=item["id"],
+                                      output_index=index, summary_index=0, text=summary["text"]))
+            events.append(self._event("response.reasoning_summary_part.done", item_id=item["id"],
+                                      output_index=index, summary_index=0, part=summary))
+        elif item["type"] == "function_call":
+            events.append(self._event("response.function_call_arguments.done", item_id=item["id"],
+                                      output_index=index, arguments=item["arguments"]))
+        item["status"] = "completed"
+        events.append(self._event("response.output_item.done", output_index=index, item=item))
+        return events
+
+    def _open_item(self, item: dict[str, Any]) -> list[dict[str, Any]]:
+        events = self._close_open()
+        self.output.append(item)
+        self._open = item
+        index = len(self.output) - 1
+        events.append(self._event("response.output_item.added", output_index=index,
+                                  item={**item, "content": []} if item["type"] == "message" else
+                                  {**item, "summary": []} if item["type"] == "reasoning" else dict(item)))
+        if item["type"] == "message":
+            events.append(self._event("response.content_part.added", item_id=item["id"],
+                                      output_index=index, content_index=0,
+                                      part={"type": "output_text", "text": "", "annotations": []}))
+        elif item["type"] == "reasoning":
+            events.append(self._event("response.reasoning_summary_part.added", item_id=item["id"],
+                                      output_index=index, summary_index=0,
+                                      part={"type": "summary_text", "text": ""}))
+        return events
+
+    def feed(self, event: dict[str, Any]) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        if event.get("error"):
+            raise ProxyError(f"upstream inference error: {event['error']}")
+        if isinstance(event.get("usage"), dict):
+            self.usage = event["usage"]
+        for choice in event.get("choices") or []:
+            delta = choice.get("delta") or {}
+            thought = delta.get("reasoning_content") or delta.get("reasoning")
+            if thought:
+                if not self._open or self._open["type"] != "reasoning":
+                    events += self._open_item({"id": "rs_" + secrets.token_hex(8), "type": "reasoning",
+                                               "summary": [{"type": "summary_text", "text": ""}]})
+                item = self._open
+                item["summary"][0]["text"] += str(thought)
+                events.append(self._event("response.reasoning_summary_text.delta", item_id=item["id"],
+                                          output_index=self.output.index(item), summary_index=0,
+                                          delta=str(thought)))
+            if delta.get("content"):
+                if not self._open or self._open["type"] != "message":
+                    events += self._open_item({"id": "msg_" + secrets.token_hex(8), "type": "message",
+                                               "status": "in_progress", "role": "assistant",
+                                               "content": [{"type": "output_text", "text": "",
+                                                            "annotations": []}]})
+                item = self._open
+                item["content"][0]["text"] += str(delta["content"])
+                events.append(self._event("response.output_text.delta", item_id=item["id"],
+                                          output_index=self.output.index(item), content_index=0,
+                                          delta=str(delta["content"])))
+            for raw in delta.get("tool_calls") or []:
+                index = int(raw.get("index", 0) or 0)
+                function = raw.get("function") or {}
+                item = self._tool_items.get(index)
+                if item is None:
+                    item = {"id": "fc_" + secrets.token_hex(8), "type": "function_call",
+                            "status": "in_progress",
+                            "call_id": str(raw.get("id") or f"call_{secrets.token_hex(6)}"),
+                            "name": str(function.get("name") or ""), "arguments": ""}
+                    self._tool_items[index] = item
+                    events += self._open_item(item)
+                elif self._open is not item:
+                    continue  # late fragment for an already closed call; ignore
+                if function.get("name") and not item["name"]:
+                    item["name"] = str(function["name"])
+                chunk = str(function.get("arguments") or "")
+                if chunk:
+                    item["arguments"] += chunk
+                    events.append(self._event("response.function_call_arguments.delta",
+                                              item_id=item["id"],
+                                              output_index=self.output.index(item), delta=chunk))
+            if choice.get("finish_reason") == "content_filter":
+                raise ProxyError("upstream blocked the response by content filter.", 400)
+        return events
+
+    def finish(self) -> list[dict[str, Any]]:
+        events = self._close_open()
+        for item in self.output:
+            if item["type"] == "function_call" and not item["arguments"]:
+                item["arguments"] = "{}"
+        self.status = "completed"
+        events.append(self._event("response.completed", response=self.response()))
+        return events
+
+    def fail(self, message: str, code: str = "upstream_error") -> list[dict[str, Any]]:
+        self.status = "failed"
+        self.error = {"code": code, "message": message}
+        return [self._event("response.failed", response=self.response())]
+
+
+def build_responses_object(deltas: Iterator[dict[str, Any]], model: str, req: dict[str, Any]) -> dict[str, Any]:
+    builder = ResponsesBuilder(model, req)
+    seen = False
+    for event in deltas:
+        seen = True
+        builder.feed(event)
+    if not seen:
+        raise ProxyError("upstream returned no events.")
+    builder.finish()
+    return builder.response()
+
+
 # ---------------------------------------------------------------- ollama bridge
 
 
@@ -1351,6 +1690,8 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/api/show"): ("open", "_post_ollama_show"),
     ("POST", "/v1/chat/completions"): ("client", "_post_chat_completions"),
     ("POST", "/chat/completions"): ("client", "_post_chat_completions"),
+    ("POST", "/v1/responses"): ("client", "_post_responses"),
+    ("POST", "/responses"): ("client", "_post_responses"),
     ("POST", "/api/chat"): ("client", "_post_ollama_chat"),
     ("POST", "/api/generate"): ("client", "_post_ollama_generate"),
     ("GET", "/api/dashboard"): ("client", "_get_dashboard_state"),
@@ -1364,7 +1705,10 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
 }
 
 INFERENCE_PATHS = frozenset(
-    {"/v1/chat/completions", "/chat/completions", "/api/chat", "/api/generate", "/api/dashboard/test"}
+    {
+        "/v1/chat/completions", "/chat/completions", "/v1/responses", "/responses",
+        "/api/chat", "/api/generate", "/api/dashboard/test",
+    }
 )
 OLLAMA_PATHS = frozenset({"/api/chat", "/api/generate", "/api/show"})
 # Successful GETs on these paths are not logged (dashboard polling, health checks).
@@ -1880,6 +2224,50 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             self._chunk(b"data: [DONE]\n\n")
         except OSError:
             pass
+        self._end_chunked()
+
+    # ---- OpenAI Responses API
+
+    def _post_responses(self) -> None:
+        req = self._read_json()
+        model = self._resolve_model(req.get("model"))
+        deltas = self._open_upstream(responses_to_chat_request(req), model)
+        if bool(req.get("stream")):
+            self._responses_stream(deltas, model, req)
+        else:
+            self._send_json(200, build_responses_object(deltas, model, req))
+
+    def _responses_stream(
+        self, deltas: Iterator[dict[str, Any]], model: str, req: dict[str, Any]
+    ) -> None:
+        builder = ResponsesBuilder(model, req)
+        self._start_chunked("text/event-stream; charset=utf-8")
+
+        def send(events: list[dict[str, Any]]) -> None:
+            for event in events:
+                payload = json.dumps(event, separators=(",", ":")).encode()
+                self._chunk(f"event: {event['type']}\ndata: ".encode() + payload + b"\n\n")
+
+        try:
+            send(builder.start())
+            seen = False
+            for event in deltas:
+                seen = True
+                send(builder.feed(event))
+            if not seen:
+                raise ProxyError("upstream returned no events.")
+            send(builder.finish())
+        except CLIENT_GONE:
+            self._meta["error"] = "client disconnected"
+            self.close_connection = True
+            return
+        except Exception as exc:  # noqa: BLE001
+            # Headers are already sent: report the failure as a response.failed event.
+            self._meta["error"] = str(exc)
+            try:
+                send(builder.fail(str(exc)))
+            except OSError:
+                pass
         self._end_chunked()
 
     # ---- Ollama API

@@ -59,6 +59,10 @@ Ausprobieren (gestreamt) und das Aktivitätsprotokoll. Wer das Dashboard aus dem
 | `POST /api/chat` · `POST /api/generate` | Key / lokal | **Ollama** Chat/Generate (streamt standardmäßig, Tools) |
 | `GET /version` · `GET /v1/props` · `GET /props` | offen | **LM Studio / llama.cpp** Probe-Endpoints |
 | `POST /v1/chat/completions` | Key / lokal | OpenAI Chat Completions (Stream und non-Stream, Tools) |
+| `POST /v1/responses` | Key / lokal | OpenAI **Responses API** (Stream und non-Stream, Tools). Zustandslos: `previous_response_id` wird nicht unterstützt, der Client schickt den ganzen Verlauf (`store: false`). |
+
+Clients können in ihren Einstellungen also sowohl „OpenAI Chat Completions“ als auch
+„OpenAI Responses“ als Protokoll wählen.
 
 Fehler mitten im Stream kommen als `data: {"error": …}` (OpenAI) bzw.
 `{"error": "…"}`-Zeile (Ollama) beim Client an. Request-Bodys sind auf 32 MB begrenzt.

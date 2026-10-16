@@ -134,6 +134,68 @@ class PureFunctionTests(unittest.TestCase):
         self.assertEqual(req["stop"], ["x"])
         self.assertEqual(req["response_format"], {"type": "json_object"})
 
+    def test_responses_request_to_chat(self):
+        chat = server.responses_to_chat_request({
+            "model": "big-pickle",
+            "instructions": "be brief",
+            "input": [
+                {"role": "developer", "content": [{"type": "input_text", "text": "rules"}]},
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+                {"type": "reasoning", "summary": []},
+                {"type": "function_call", "call_id": "c1", "name": "f", "arguments": '{"a":1}'},
+                {"type": "function_call", "call_id": "c2", "name": "g", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": "done"},
+            ],
+            "tools": [{"type": "function", "name": "f", "parameters": {"type": "object"}},
+                      {"type": "web_search"}],
+            "tool_choice": {"type": "function", "name": "f"},
+            "max_output_tokens": 50,
+            "text": {"format": {"type": "json_object"}},
+        })
+        roles = [m["role"] for m in chat["messages"]]
+        self.assertEqual(roles, ["system", "system", "user", "assistant", "tool"])
+        self.assertEqual(chat["messages"][2]["content"], "hi")
+        self.assertEqual([c["id"] for c in chat["messages"][3]["tool_calls"]], ["c1", "c2"])
+        self.assertEqual(chat["messages"][4], {"role": "tool", "tool_call_id": "c1", "content": "done"})
+        self.assertEqual([t["function"]["name"] for t in chat["tools"]], ["f"])
+        self.assertEqual(chat["tool_choice"], {"type": "function", "function": {"name": "f"}})
+        self.assertEqual(chat["max_tokens"], 50)
+        self.assertEqual(chat["response_format"], {"type": "json_object"})
+        self.assertEqual(server.responses_to_chat_request({"input": "x"})["messages"],
+                         [{"role": "user", "content": "x"}])
+        with self.assertRaises(server.ProxyError):
+            server.responses_to_chat_request({"previous_response_id": "resp_1"})
+
+    def test_responses_builder_text_reasoning_and_tools(self):
+        events = [
+            {"choices": [{"index": 0, "delta": {"reasoning_content": "hmm"}}]},
+            chunk("Hel"), chunk("lo"),
+            chunk(tool={"index": 0, "id": "call_a", "function": {"name": "f", "arguments": '{"x"'}}),
+            chunk(tool={"index": 0, "function": {"arguments": ":1}"}}),
+            chunk(tool={"index": 1, "id": "call_b", "function": {"name": "g"}}),
+            chunk(finish="tool_calls", usage={"prompt_tokens": 3, "completion_tokens": 4}),
+        ]
+        b = server.ResponsesBuilder("m", {})
+        stream = b.start()
+        for e in events:
+            stream += b.feed(e)
+        stream += b.finish()
+        types = [e["type"] for e in stream]
+        self.assertEqual(types[:2], ["response.created", "response.in_progress"])
+        self.assertEqual(types[-1], "response.completed")
+        self.assertEqual([e["sequence_number"] for e in stream], list(range(len(stream))))
+        self.assertEqual(types.count("response.output_item.added"), 4)
+        self.assertEqual(types.count("response.output_item.done"), 4)
+        out = stream[-1]["response"]["output"]
+        self.assertEqual([i["type"] for i in out], ["reasoning", "message", "function_call", "function_call"])
+        self.assertEqual(out[0]["summary"][0]["text"], "hmm")
+        self.assertEqual(out[1]["content"][0]["text"], "Hello")
+        self.assertEqual((out[2]["call_id"], out[2]["name"], out[2]["arguments"]), ("call_a", "f", '{"x":1}'))
+        self.assertEqual(out[3]["arguments"], "{}")
+        self.assertEqual(stream[-1]["response"]["output_text"], "Hello")
+        self.assertEqual(stream[-1]["response"]["usage"]["total_tokens"], 7)
+        self.assertTrue(all(i["status"] == "completed" for i in out if "status" in i))
+
     def test_metrics_timeline_and_models(self):
         m = server.Metrics()
         m.record({"status": 200, "ms": 100, "model": "a", "tokens_in": 1, "tokens_out": 2}, inference=True)
@@ -157,6 +219,7 @@ class ServerTests(unittest.TestCase):
             mock.patch.object(server, "KEY_FILE", Path(cls.tmp.name) / "api-key.txt"),
             mock.patch.object(server, "available_models", lambda *a, **k: list(MODELS)),
             mock.patch.object(server, "_lan_ip", lambda: "192.168.1.20"),
+            mock.patch.object(server, "_emit", lambda *a, **k: None),  # quiet request log
         ]
         for p in cls.patches:
             p.start()
@@ -290,6 +353,40 @@ class ServerTests(unittest.TestCase):
         with mock.patch.object(server, "MAX_BODY_BYTES", 10):
             status, _ = self.request("POST", "/v1/chat/completions", {"model": "big-pickle"})
         self.assertEqual(status, 413)
+
+    # ---- responses API
+
+    def test_responses_non_stream(self):
+        status, body = self.request("POST", "/v1/responses", {"model": "big-pickle", "input": "hi"})
+        self.assertEqual(status, 200)
+        resp = json.loads(body)
+        self.assertEqual((resp["object"], resp["status"], resp["output_text"]), ("response", "completed", "Hello"))
+        self.assertEqual(resp["usage"]["input_tokens"], 5)
+
+    def test_responses_stream(self):
+        status, body = self.request("POST", "/v1/responses", {"model": "big-pickle", "input": "hi", "stream": True})
+        self.assertEqual(status, 200)
+        blocks = [b for b in body.decode().split("\n\n") if b.strip()]
+        events = []
+        for block in blocks:
+            name, data = block.split("\n", 1)
+            event = json.loads(data[len("data: "):])
+            self.assertEqual(name, "event: " + event["type"])
+            events.append(event)
+        self.assertEqual(events[-1]["type"], "response.completed")
+        text = "".join(e["delta"] for e in events if e["type"] == "response.output_text.delta")
+        self.assertEqual(text, "Hello")
+
+    def test_responses_stream_error(self):
+        with mock.patch.object(server, "open_upstream_events", fake_upstream(OK_EVENTS, fail_after=1)):
+            _, body = self.request("POST", "/v1/responses", {"model": "big-pickle", "input": "x", "stream": True})
+        last = json.loads(body.decode().strip().split("\n\n")[-1].split("data: ", 1)[1])
+        self.assertEqual(last["type"], "response.failed")
+        self.assertEqual(last["response"]["error"]["message"], "upstream exploded")
+
+    def test_responses_needs_key_remotely(self):
+        self.as_remote()
+        self.assertEqual(self.request("POST", "/v1/responses", {"model": "big-pickle"})[0], 401)
 
     # ---- ollama
 
