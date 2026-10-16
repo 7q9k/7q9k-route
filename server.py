@@ -7,6 +7,7 @@ import ipaddress
 import itertools
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -25,7 +26,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 
-APP_VERSION = "1.3.2"
+import integrations
+
+APP_VERSION = "1.4.0"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -1817,6 +1820,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "access": "network",
     "port": DEFAULT_PORT,
     "open_browser": True,
+    "integrations": [],
 }
 ACCESS_HOSTS = {"local": "127.0.0.1", "network": "0.0.0.0"}
 CONFIG: dict[str, Any] = dict(DEFAULT_CONFIG)
@@ -1837,6 +1841,9 @@ def load_config() -> dict[str, Any]:
         config["port"] = int(config["port"])
     except (TypeError, ValueError):
         config["port"] = DEFAULT_PORT
+    if not isinstance(config.get("integrations"), list):
+        config["integrations"] = []
+    config["integrations"] = [str(i) for i in config["integrations"] if isinstance(i, str)]
     env_access = os.environ.get("OCFREE_ACCESS")
     if env_access in ACCESS_HOSTS:
         config["access"] = env_access
@@ -1992,6 +1999,39 @@ def _write_key(key: str) -> str:
 
 def regenerate_api_key() -> str:
     return _write_key("sk-oc-free-" + secrets.token_hex(20))
+
+
+KEY_PATTERN = re.compile(r"^[A-Za-z0-9._~+/=-]{8,200}$")
+
+
+def integration_target() -> integrations.Target:
+    models = available_models()
+    default = DEFAULT_MODEL if DEFAULT_MODEL in models else (models[0] if models else DEFAULT_MODEL)
+    return integrations.Target(
+        base_url=f"http://127.0.0.1:{BOUND_PORT}/v1",
+        api_key=OpenAICompatibleHandler.api_key,
+        models=list(models),
+        default_model=default,
+    )
+
+
+def backups_dir() -> Path:
+    return DATA_DIR / "backups"
+
+
+def sync_integrations() -> list[str]:
+    with CONFIG_LOCK:
+        enabled = list(CONFIG.get("integrations") or [])
+    if not enabled:
+        return []
+    updated = integrations.sync(enabled, integration_target(), backups_dir(), log=lambda m: _emit(f"[oc-free-api] {m}"))
+    for item in updated:
+        _emit(f"[oc-free-api] updated {integrations.get(item).name}")
+    return updated
+
+
+def sync_integrations_async() -> None:
+    threading.Thread(target=sync_integrations, daemon=True).start()
 
 
 def ensure_api_key() -> str:
@@ -2243,6 +2283,9 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/api/dashboard/key"): ("admin", "_post_new_key"),
     ("POST", "/api/dashboard/stop"): ("admin", "_post_stop_server"),
     ("POST", "/api/dashboard/open-folder"): ("admin", "_post_open_folder"),
+    ("GET", "/api/dashboard/integrations"): ("admin", "_get_integrations"),
+    ("POST", "/api/dashboard/integrations/connect"): ("admin", "_post_integration_connect"),
+    ("POST", "/api/dashboard/integrations/disconnect"): ("admin", "_post_integration_disconnect"),
 }
 
 INFERENCE_PATHS = frozenset(
@@ -2254,7 +2297,7 @@ INFERENCE_PATHS = frozenset(
 OLLAMA_PATHS = frozenset({"/api/chat", "/api/generate", "/api/show"})
 QUIET_PATHS = frozenset(
     {"/", "/dashboard", "/favicon.ico", "/health", "/api/dashboard", "/api/dashboard/stats",
-     "/api/dashboard/log", "/api/dashboard/settings",
+     "/api/dashboard/log", "/api/dashboard/settings", "/api/dashboard/integrations",
      "/assets/fonts/geist.woff2", "/assets/fonts/geist-mono.woff2"}
 )
 CLIENT_GONE = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
@@ -2755,6 +2798,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     def _post_refresh_models(self) -> None:
         models = available_models(refresh=True)
+        sync_integrations_async()
         self._send_json(200, {"ok": True, "models": models, **model_source()})
 
     def _post_dashboard_test(self) -> None:
@@ -2765,9 +2809,69 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         self._send_json(200, result)
 
     def _post_new_key(self) -> None:
-        new_key = regenerate_api_key()
+        req = self._read_json()
+        custom = str(req.get("key") or "").strip()
+        if custom:
+            if not KEY_PATTERN.match(custom):
+                raise ProxyError("the key needs 8 to 200 characters: letters, digits and . _ ~ + / = -", 400)
+            new_key = _write_key(custom)
+        else:
+            new_key = regenerate_api_key()
         OpenAICompatibleHandler.api_key = new_key
+        sync_integrations_async()
         self._send_json(200, {"ok": True, "api_key": new_key})
+
+    def _get_integrations(self) -> None:
+        with CONFIG_LOCK:
+            enabled = list(CONFIG.get("integrations") or [])
+        apps = integrations.describe_all(integration_target())
+        for app in apps:
+            app["auto_update"] = app["id"] in enabled
+        self._send_json(200, {"ok": True, "apps": apps, "backups": str(backups_dir())})
+
+    def _integration_id(self) -> str:
+        req = self._read_json()
+        integration_id = str(req.get("id") or "")
+        try:
+            integrations.get(integration_id)
+        except integrations.IntegrationError as exc:
+            raise ProxyError(str(exc), 404) from exc
+        return integration_id
+
+    def _set_enabled(self, integration_id: str, enabled: bool) -> None:
+        with CONFIG_LOCK:
+            current = [i for i in CONFIG.get("integrations") or [] if i != integration_id]
+            if enabled:
+                current.append(integration_id)
+            CONFIG["integrations"] = current
+        try:
+            save_config()
+        except OSError:
+            pass
+
+    def _post_integration_connect(self) -> None:
+        integration_id = self._integration_id()
+        try:
+            app = integrations.connect(integration_id, integration_target(), backups_dir())
+        except integrations.IntegrationError as exc:
+            raise ProxyError(str(exc), 409) from exc
+        except OSError as exc:
+            raise ProxyError(f"could not write the app config: {exc}", 500) from exc
+        self._set_enabled(integration_id, True)
+        app["auto_update"] = True
+        self._send_json(200, {"ok": True, "app": app})
+
+    def _post_integration_disconnect(self) -> None:
+        integration_id = self._integration_id()
+        try:
+            app = integrations.disconnect(integration_id, integration_target(), backups_dir())
+        except integrations.IntegrationError as exc:
+            raise ProxyError(str(exc), 409) from exc
+        except OSError as exc:
+            raise ProxyError(f"could not write the app config: {exc}", 500) from exc
+        self._set_enabled(integration_id, False)
+        app["auto_update"] = False
+        self._send_json(200, {"ok": True, "app": app})
 
     def _post_open_folder(self) -> None:
         if not hasattr(os, "startfile"):
@@ -3186,7 +3290,6 @@ def _main() -> None:
     else:
         preload_models()
         models = available_models()
-        threading.Thread(target=available_models, kwargs={"refresh": True}, daemon=True).start()
     refresh_autostart()
     METRICS = Metrics(None if args.no_save else STATS_FILE)
     restored = METRICS.load()
@@ -3224,6 +3327,13 @@ def _main() -> None:
             _emit("")
     if METRICS.path is not None:
         threading.Thread(target=METRICS.autosave_loop, daemon=True).start()
+
+    def refresh_and_sync() -> None:
+        if not args.refresh_models:
+            available_models(refresh=True)
+        sync_integrations()
+
+    threading.Thread(target=refresh_and_sync, daemon=True).start()
     if open_browser:
         threading.Timer(0.3, webbrowser.open, args=(dashboard_url,)).start()
     if show_window:

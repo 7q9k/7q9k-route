@@ -236,6 +236,10 @@
   .save-bar{ display:flex; justify-content:flex-end; gap:8px; margin-top:20px; }
   .tabs2{ display:flex; gap:4px; margin-top:24px; }
   .stopped{ text-align:center; padding-top:12vh; }
+  .badge{ display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); white-space:nowrap; }
+  .badge.ok{ color:var(--signal); }
+  .badge.warn, .badge.bad{ color:var(--bad); }
+  .app-actions{ display:flex; align-items:center; gap:14px; }
   @media (max-width:760px){
     .hbars li{ grid-template-columns:minmax(0,1fr) 84px; gap:4px 12px; }
     .hbars .n{ grid-column:1 / -1; }
@@ -253,6 +257,7 @@
   <nav class="nav" id="nav" hidden>
     <a href="#/overview" data-page="overview">Overview</a>
     <a href="#/connect" data-page="connect">Connect</a>
+    <a href="#/apps" data-page="apps">Apps</a>
     <a href="#/models" data-page="models">Models</a>
     <a href="#/usage" data-page="usage">Usage</a>
     <a href="#/activity" data-page="activity">Activity</a>
@@ -358,6 +363,17 @@
       </section>
     </div>
 
+    <div class="page" data-page="apps" hidden>
+      <h1 class="title">Apps</h1>
+      <p class="lead">Add oc-free-api to apps on this computer with one click. The entry stays up to date when the key, port or model list changes.</p>
+      <div id="appsLocked" hidden><p class="hint">Apps can only be connected on the computer that runs the server.</p></div>
+      <section class="section" id="appsSection">
+        <div class="section-head"><h2>Found on this computer</h2><button class="text-btn" id="btnAppsRefresh">Check again</button></div>
+        <ul class="list" id="apps"></ul>
+        <p class="hint" id="appsNote"></p>
+      </section>
+    </div>
+
     <div class="page" data-page="models" hidden>
       <h1 class="title">Models</h1>
       <p class="lead">Send a message to try a model, or test them all.</p>
@@ -456,8 +472,11 @@
           <ul class="rows">
             <li><span class="k">Current key</span><span class="v" id="apiKey2">–</span><span class="a"><button class="text-btn" data-copy-key>Copy</button></span></li>
           </ul>
-          <p class="hint">A new key logs out every app that uses the old one.</p>
-          <div class="save-bar"><button class="btn" id="btnKey">New API key</button></div>
+          <ul class="form">
+            <li><div class="k"><b>Use your own key</b><span>Stays the same across restarts and updates</span></div><div><input class="input" id="ownKey" autocomplete="off" spellcheck="false" placeholder="at least 8 characters" aria-label="Your own API key"></div></li>
+          </ul>
+          <p class="hint">The key is kept across restarts. Apps connected under Apps are updated automatically when it changes; other apps need the new key.</p>
+          <div class="save-bar"><button class="btn" id="btnOwnKey">Save my key</button><button class="btn" id="btnKey">New random key</button></div>
         </section>
         <section class="section">
           <div class="section-head"><h2>Server control</h2></div>
@@ -526,12 +545,13 @@ async function busy(btn, fn){ btn.disabled=true; try{ await fn(); }catch(e){ if 
 
 let state=null, stats=null, settings=null, revealed=false, tab='app', logFilter='all', stopped=false;
 
-const PAGES = ['overview','connect','models','usage','activity','settings'];
+const PAGES = ['overview','connect','apps','models','usage','activity','settings'];
 function route(){
   const page = PAGES.includes(location.hash.slice(2)) ? location.hash.slice(2) : 'overview';
   $$('.page').forEach(p => p.hidden = p.dataset.page !== page);
   $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.page === page));
   if (page === 'settings') loadSettings();
+  if (page === 'apps') loadApps();
   if (page === 'overview' || page === 'usage') renderChart();
   window.scrollTo(0, 0);
 }
@@ -857,11 +877,62 @@ $('btnRefresh').onclick=e=>busy(e.currentTarget, async()=>{ const r=await api('/
 $('btnTestAll').onclick=e=>busy(e.currentTarget, async()=>{ for (const li of $('models').children) await testModel(li); });
 $('btnSave').onclick=e=>busy(e.currentTarget, async()=>{ const r=await api('/api/dashboard/save',{}); toast(`Saved to ${r.file.split(/[\\/]/).pop()}`); refreshStats(); });
 armed($('btnReset'), 'Really delete all?', async()=>{ await api('/api/dashboard/reset',{}); toast('Stats reset'); refreshStats(); });
-armed($('btnKey'), 'Really replace it?', async()=>{ await api('/api/dashboard/key',{}); await loadState(); toast('New key active. Update your apps.'); });
+armed($('btnKey'), 'Really replace it?', async()=>{ await api('/api/dashboard/key',{}); await loadState(); toast('New key active. Connected apps are updated.'); });
 armed($('btnStop'), 'Really stop?', async()=>{
   await api('/api/dashboard/stop',{});
   stopped = true; $('app').hidden = true; $('nav').hidden = true; $('stopped').hidden = false;
   $('state').classList.add('down'); $('state').innerHTML = '<b>Stopped</b>'; $('uptime').textContent = '';
+});
+
+const APP_STATUS = {
+  connected: ['ok', 'Connected'],
+  outdated: ['warn', 'Needs update'],
+  not_connected: ['', 'Not connected'],
+  not_installed: ['', 'Not installed'],
+  error: ['bad', 'Cannot edit'],
+};
+async function loadApps(){
+  if (!state) return;
+  $('appsLocked').hidden = state.local;
+  $('appsSection').hidden = !state.local;
+  if (!state.local) return;
+  try{ const r = await api('/api/dashboard/integrations'); renderApps(r); }
+  catch(e){ toast(e.message); }
+}
+function renderApps(r){
+  const order = {connected:0, outdated:1, not_connected:2, error:3, not_installed:4};
+  const apps = [...r.apps].sort((a,b)=>order[a.status]-order[b.status]);
+  $('apps').innerHTML = apps.map(a => {
+    const [cls, label] = APP_STATUS[a.status] || ['', a.status];
+    const sub = a.status === 'not_installed' ? 'Not found on this computer'
+      : a.status === 'error' ? esc(a.error || '')
+      : esc(a.config || '');
+    let actions = '';
+    if (a.status === 'not_connected') actions = `<button class="btn" data-app-connect="${esc(a.id)}">Connect</button>`;
+    if (a.status === 'outdated') actions = `<button class="btn" data-app-connect="${esc(a.id)}">Update</button><button class="text-btn" data-app-disconnect="${esc(a.id)}">Remove</button>`;
+    if (a.status === 'connected') actions = `<button class="text-btn" data-app-disconnect="${esc(a.id)}">Remove</button>`;
+    return `<li><div style="min-width:0"><div class="l-title" style="font-family:var(--sans); font-size:14.5px; font-weight:550">${esc(a.name)}</div><div class="l-sub"><span class="badge ${cls}">${label}</span><span style="overflow-wrap:anywhere">${sub}</span></div></div><div class="app-actions">${actions}</div></li>`;
+  }).join('');
+  $('appsNote').textContent = `A backup of every changed file is kept in ${r.backups}.`;
+  $$('[data-app-connect]').forEach(b => b.onclick = () => busy(b, async () => {
+    const res = await api('/api/dashboard/integrations/connect', {id: b.dataset.appConnect});
+    toast(`${res.app.name} connected. ${res.app.restart_hint}`);
+    loadApps();
+  }));
+  $$('[data-app-disconnect]').forEach(b => armed(b, 'Really remove?', async () => {
+    const res = await api('/api/dashboard/integrations/disconnect', {id: b.dataset.appDisconnect});
+    toast(`${res.app.name}: oc-free-api removed`);
+    loadApps();
+  }));
+}
+$('btnAppsRefresh').onclick = e => busy(e.currentTarget, loadApps);
+$('btnOwnKey').onclick = e => busy(e.currentTarget, async () => {
+  const key = $('ownKey').value.trim();
+  if (!key) { toast('Enter a key first.'); return; }
+  await api('/api/dashboard/key', {key});
+  $('ownKey').value = '';
+  await loadState();
+  toast('Key saved. Connected apps are updated.');
 });
 
 let pgAbort=null;

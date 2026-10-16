@@ -190,6 +190,51 @@ class ServerBugTests(unittest.TestCase):
     request = ServerHarness["request"]
     as_remote = ServerHarness["as_remote"]
 
+    def test_apps_endpoints(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        home = Path(tmp.name)
+        cfg = home / "hermes" / "config.yaml"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text("custom_providers: []\n", encoding="utf-8")
+        env = mock.patch.dict(server.os.environ, {"USERPROFILE": tmp.name, "HOME": tmp.name,
+                                                  "LOCALAPPDATA": tmp.name, "APPDATA": tmp.name})
+        env.start()
+        self.addCleanup(env.stop)
+        server.os.environ.pop("HERMES_HOME", None)
+        server.CONFIG = dict(server.DEFAULT_CONFIG, integrations=[])
+        self.addCleanup(setattr, server, "CONFIG", dict(server.DEFAULT_CONFIG))
+        data_dir = mock.patch.object(server, "DATA_DIR", home / "data")
+        data_dir.start()
+        self.addCleanup(data_dir.stop)
+        apps = {a["id"]: a for a in json.loads(self.request("GET", "/api/dashboard/integrations")[1])["apps"]}
+        self.assertEqual(apps["hermes"]["status"], "not_connected")
+        status, body = self.request("POST", "/api/dashboard/integrations/connect", {"id": "hermes"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["app"]["status"], "connected")
+        self.assertEqual(server.CONFIG["integrations"], ["hermes"])
+        self.assertIn(KEY, cfg.read_text(encoding="utf-8"))
+        self.assertEqual(self.request("POST", "/api/dashboard/integrations/connect", {"id": "nope"})[0], 404)
+        self.assertEqual(self.request("POST", "/api/dashboard/integrations/connect", {"id": "opencode"})[0], 409)
+        status, body = self.request("POST", "/api/dashboard/integrations/disconnect", {"id": "hermes"})
+        self.assertEqual(json.loads(body)["app"]["status"], "not_connected")
+        self.assertEqual(server.CONFIG["integrations"], [])
+        self.as_remote()
+        ok = {"Authorization": f"Bearer {KEY}"}
+        self.assertEqual(self.request("GET", "/api/dashboard/integrations", headers=ok)[0], 403)
+
+    def test_own_key(self):
+        self.addCleanup(server.KEY_FILE.write_text, KEY, encoding="utf-8")
+        self.addCleanup(setattr, server.OpenAICompatibleHandler, "api_key", KEY)
+        self.assertEqual(self.request("POST", "/api/dashboard/key", {"key": "short"})[0], 400)
+        self.assertEqual(self.request("POST", "/api/dashboard/key", {"key": "has space in it"})[0], 400)
+        status, body = self.request("POST", "/api/dashboard/key", {"key": "my-fixed-key-123"})
+        self.assertEqual(status, 200)
+        self.assertEqual(server.KEY_FILE.read_text(encoding="utf-8").strip(), "my-fixed-key-123")
+        self.as_remote()
+        ok = {"Authorization": "Bearer my-fixed-key-123"}
+        self.assertEqual(self.request("POST", "/v1/chat/completions", {"model": "big-pickle"}, ok)[0], 200)
+
     def test_host_check_is_exact(self):
         machine = server.socket.gethostname().lower().split(".", 1)[0]
         status, body = self.request("GET", "/api/dashboard", headers={"Host": f"{machine}.evil.example:{self.port}"})
