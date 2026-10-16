@@ -1,4 +1,5 @@
 api-key.txt
 models.json
+examples/demo-workspace/
 *.pyc
 __pycache__/
