@@ -9,17 +9,19 @@ Nur Python-Standardbibliothek, keine Abhängigkeiten. Server für **persönliche
 ## Start
 
 ```powershell
-python server.py       # default: http://127.0.0.1:8787
+python server.py       # default: localhost + LAN (bindet auf 0.0.0.0)
 # oder
 .\start.bat
 ```
+
+Nur lokal binden (LAN aus): `python server.py --host 127.0.0.1`
 
 Beim ersten Start wird ein API-Key generiert, in `api-key.txt` gespeichert und in der
 Konsole angezeigt. Optionen:
 
 ```
 --port 9000            anderer Port
---host 0.0.0.0         auch im LAN erreichbar (Vorsicht!)
+--host 127.0.0.1       nur lokal (kein LAN)
 --key sk-meinkey       eigenen Key setzen
 --refresh-models       Modell-Liste einmalig neu abfragen
 ```

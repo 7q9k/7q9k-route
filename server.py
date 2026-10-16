@@ -24,6 +24,8 @@ import itertools
 import json
 import os
 import secrets
+import socket
+import string
 import string
 import sys
 import threading
@@ -1058,6 +1060,7 @@ def regenerate_api_key() -> str:
 
 
 SERVER: Any = None
+BOUND_OPEN: bool = False
 
 
 def dashboard_state() -> dict[str, Any]:
@@ -1070,6 +1073,7 @@ def dashboard_state() -> dict[str, Any]:
         "api_key": api_key_cache() or "(benoetigt Neustart)",
         "models": models,
         "log": list(REQUEST_LOG),
+        "lan_ip": None if not BOUND_OPEN else _lan_ip(),
     }
 
 
@@ -1154,23 +1158,40 @@ def _console_init() -> None:
     VT = _enable_windows_vt()
 
 
-def _print_banner(port: int, host: str, key: str, models: list[str]) -> None:
-    dash_url = f"http://{host}:{port}/"
-    base_url = f"http://{host}:{port}/v1"
-    shown_models = ", ".join(models[:5]) + (" …" if len(models) > 5 else "")
+def _lan_ip() -> str:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("9.9.9.9", 53))
+        return str(sock.getsockname()[0])
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        sock.close()
 
+
+def _print_banner(port: int, host: str, key: str, models: list[str]) -> None:
+    base_url = f"http://localhost:{port}/v1"
+    shown_models = ", ".join(models[:5]) + (" …" if len(models) > 5 else "")
     _emit("")
-    _emit(_paint("┌" + "─" * 62 + "┐", "dim"))
-    _emit("│ " + _paint("oc-free-api", "bright") + "  " + _paint("OpenCode Zen free models — lokal", "dim"))
-    _emit(_paint("├" + "─" * 62 + "┤", "dim"))
-    _emit("│ " + _paint(f"Dashboard  ", "cyan") + _paint(dash_url, "green"))
-    _emit("│ " + _paint(f"Base URL   ", "cyan") + _paint(base_url, "bright"))
-    _emit("│ " + _paint(f"API-Key    ", "cyan") + _paint(key, "yellow"))
-    _emit("│ " + _paint(f"Modelle    ", "cyan") + _paint(f"{len(models)} verfügbar: {shown_models}", "bright"))
-    _emit("│ " + _paint(f"Beenden    ", "cyan") + _paint("Ctrl+C hier oder Fenster schließen", "dim"))
-    _emit(_paint("├" + "─" * 62 + "┤", "dim"))
-    _emit("│ " + _paint("Live-Log der Anfragen …", "dim"))
-    _emit(_paint("└" + "─" * 62 + "┘", "dim"))
+    _emit(
+        _paint("oc-free-api", "bright")
+        + "   "
+        + _paint("OpenCode free models · OpenAI-kompatibel", "dim")
+    )
+    _emit("  " + _paint("Dashboard ", "cyan") + _paint(f"http://localhost:{port}/", "green"))
+    if host in ("0.0.0.0", "::"):
+        _emit(
+            "  " + _paint("Netzwerk  ", "cyan")
+            + _paint(f"http://{_lan_ip()}:{port}/", "green")
+            + _paint("  (LAN, ggf. in der Firewall erlaubt)", "dim")
+        )
+    _emit("  " + _paint("Base URL  ", "cyan") + _paint(base_url, "bright"))
+    _emit("  " + _paint("API-Key   ", "cyan") + _paint(key, "yellow"))
+    _emit(
+        "  " + _paint("Modelle   ", "cyan")
+        + _paint(f"{len(models)} verfügbar: {shown_models}", "bright")
+    )
+    _emit("  " + _paint("Beenden   ", "cyan") + _paint("Ctrl+C oder Fenster schließen", "dim"))
     _emit("")
 
 
@@ -1250,6 +1271,10 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         # All request logging is done by log_request with colors.
         return
 
+    def _trusted(self) -> bool:
+        """Local connections (Dashboard full view, stop/key controls)."""
+        return self.client_address[0] in {"127.0.0.1", "::1"}
+
     def _authorized(self) -> bool:
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer ") and auth[7:].strip() == self.api_key:
@@ -1327,7 +1352,11 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"log": list(REQUEST_LOG)})
             return
         if path == "/api/dashboard":
-            self._send_json(200, dashboard_state())
+            state = dashboard_state()
+            if not self._trusted():
+                state["api_key"] = "(nur lokal am Server sichtbar)"
+                state["remote"] = True
+            self._send_json(200, state)
             return
         if path == "/api/tags":
             try:
@@ -1463,11 +1492,17 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             self._send_error_json(exc.status_code, str(exc))
 
     def _post_new_key(self) -> None:
+        if not self._trusted():
+            self._send_error_json(403, "Key-Reset only from the server machine locally.")
+            return
         new_key = regenerate_api_key()
         OpenAICompatibleHandler.api_key = new_key
         self._send_json(200, {"ok": True, "api_key": new_key})
 
     def _post_stop_server(self) -> None:
+        if not self._trusted():
+            self._send_error_json(403, "only from the server machine locally.")
+            return
         self._send_json(200, {"ok": True, "stopping": True})
         if SERVER is not None:
             threading.Thread(target=SERVER.shutdown, daemon=True).start()
@@ -1799,7 +1834,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="OpenAI-compatible local API for OpenCode Zen free models."
     )
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--key", help="use a specific API key instead of the generated one")
     parser.add_argument(
@@ -1819,9 +1854,10 @@ def main() -> None:
 
     server = ThreadingHTTPServer((args.host, args.port), OpenAICompatibleHandler)
     server.daemon_threads = True
-    global SERVER
+    global SERVER, BOUND_OPEN
     SERVER = server
-    base = f"http://{args.host}:{args.port}/v1"
+    BOUND_OPEN = args.host in ("0.0.0.0", "::")
+    base = f"http://localhost:{args.port}/v1"
 
     _console_init()
     _print_banner(args.port, args.host, api_key, models)
