@@ -166,32 +166,6 @@ class HermesTests(Base):
         self.assertEqual(self.path.read_text(encoding="utf-8"), "custom_providers: []\nlater: 1\n")
 
 
-class OpenCodeTests(Base):
-    def setUp(self):
-        super().setUp()
-        self.path = self.home / ".config" / "opencode" / "opencode.json"
-        self.path.parent.mkdir(parents=True)
-        self.path.write_text(json.dumps({"mcp": {"rea": {"type": "local"}}}, indent=2), encoding="utf-8")
-        self.app = integrations.OpenCode()
-
-    def test_connect_and_disconnect(self):
-        self.app.connect(target(), self.backups)
-        data = json.loads(self.path.read_text(encoding="utf-8"))
-        self.assertEqual(data["mcp"], {"rea": {"type": "local"}})
-        self.assertEqual(data["provider"]["oc-free"]["options"]["baseURL"], "http://127.0.0.1:8787/v1")
-        self.assertEqual(self.app.status(target()), "connected")
-        self.app.disconnect(self.backups)
-        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8")), {"mcp": {"rea": {"type": "local"}}})
-
-    def test_jsonc_is_not_touched(self):
-        self.path.write_text('{\n  // comment\n  "mcp": {}\n}\n', encoding="utf-8")
-        info = self.app.describe(target())
-        self.assertEqual(info["status"], "error")
-        with self.assertRaises(integrations.IntegrationError):
-            self.app.connect(target(), self.backups)
-        self.assertIn("// comment", self.path.read_text(encoding="utf-8"))
-
-
 class RegistryTests(Base):
     def test_detection_and_sync(self):
         apps = {a["id"]: a for a in integrations.describe_all(target())}

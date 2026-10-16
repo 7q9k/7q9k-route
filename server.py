@@ -28,7 +28,7 @@ from typing import Any, Iterator
 
 import integrations
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -3335,12 +3335,16 @@ def _main() -> None:
 
     threading.Thread(target=refresh_and_sync, daemon=True).start()
     if open_browser:
-        threading.Timer(0.3, webbrowser.open, args=(dashboard_url,)).start()
+        opener = threading.Timer(0.3, webbrowser.open, args=(dashboard_url,))
+        opener.daemon = True
+        opener.start()
     if show_window:
         def detach() -> None:
             open_log_file()
             _windows_console_close()
-        threading.Timer(6.0, detach).start()
+        closer = threading.Timer(6.0, detach)
+        closer.daemon = True
+        closer.start()
 
     try:
         server.serve_forever()

@@ -339,70 +339,7 @@ class Hermes(Integration):
         _write_text(path, "\n".join(lines) + "\n", newline, bom, backup_dir)
 
 
-class OpenCode(Integration):
-    id = "opencode"
-    name = "OpenCode"
-    restart_hint = "Restart OpenCode, then choose a model from oc-free-api."
-
-    def config_paths(self) -> list[Path]:
-        base = Path(os.environ["XDG_CONFIG_HOME"]) if os.environ.get("XDG_CONFIG_HOME") else _home() / ".config"
-        return [base / "opencode" / "opencode.json"]
-
-    def app_present(self) -> bool:
-        appdata = Path(os.environ.get("APPDATA") or "")
-        return (_home() / ".config" / "opencode").exists() or (appdata / "ai.opencode.desktop").exists()
-
-    def provider_value(self, target: Target) -> dict[str, Any]:
-        return {
-            "npm": "@ai-sdk/openai-compatible",
-            "name": DISPLAY_NAME,
-            "options": {"baseURL": target.base_url, "apiKey": target.api_key},
-            "models": {m: {"name": m} for m in target.models},
-        }
-
-    def _load(self) -> dict[str, Any]:
-        path = self.config_paths()[0]
-        if not path.exists():
-            return {}
-        try:
-            data = json.loads(_read_text(path)[0] or "{}")
-        except ValueError as exc:
-            raise IntegrationError("opencode.json contains comments or is not plain JSON; add it in OpenCode instead") from exc
-        if not isinstance(data, dict):
-            raise IntegrationError("opencode.json has an unexpected format")
-        return data
-
-    def status(self, target: Target) -> str:
-        current = (self._load().get("provider") or {}).get(PROVIDER_ID)
-        if current is None:
-            return "not_connected"
-        return "connected" if current == self.provider_value(target) else "outdated"
-
-    def connect(self, target: Target, backup_dir: Path) -> None:
-        data = self._load()
-        providers = data.setdefault("provider", {})
-        if not isinstance(providers, dict):
-            raise IntegrationError("opencode.json has an unexpected provider section")
-        providers[PROVIDER_ID] = self.provider_value(target)
-        self._save(data, backup_dir)
-
-    def disconnect(self, backup_dir: Path) -> None:
-        data = self._load()
-        if PROVIDER_ID in (data.get("provider") or {}):
-            del data["provider"][PROVIDER_ID]
-            if not data["provider"]:
-                del data["provider"]
-            self._save(data, backup_dir)
-
-    def _save(self, data: dict[str, Any], backup_dir: Path) -> None:
-        path = self.config_paths()[0]
-        newline, bom = ("\n", False)
-        if path.exists():
-            _, newline, bom = _read_text(path)
-        _write_text(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n", newline, bom, backup_dir)
-
-
-REGISTRY: list[Integration] = [DeepSeekHarness(), Hermes(), OpenCode()]
+REGISTRY: list[Integration] = [DeepSeekHarness(), Hermes()]
 
 
 def get(integration_id: str) -> Integration:

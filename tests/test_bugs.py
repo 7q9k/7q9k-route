@@ -215,7 +215,7 @@ class ServerBugTests(unittest.TestCase):
         self.assertEqual(server.CONFIG["integrations"], ["hermes"])
         self.assertIn(KEY, cfg.read_text(encoding="utf-8"))
         self.assertEqual(self.request("POST", "/api/dashboard/integrations/connect", {"id": "nope"})[0], 404)
-        self.assertEqual(self.request("POST", "/api/dashboard/integrations/connect", {"id": "opencode"})[0], 409)
+        self.assertEqual(self.request("POST", "/api/dashboard/integrations/connect", {"id": "deepseek-harness"})[0], 409)
         status, body = self.request("POST", "/api/dashboard/integrations/disconnect", {"id": "hermes"})
         self.assertEqual(json.loads(body)["app"]["status"], "not_connected")
         self.assertEqual(server.CONFIG["integrations"], [])

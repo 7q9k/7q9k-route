@@ -23,7 +23,7 @@ Command line options (optional): `--port`, `--host`, `--key`, `--no-browser`, `-
 
 ## Apps
 
-The Apps tab finds supported apps on this computer and adds oc-free-api to them with one click: DeepSeek Harness, Hermes and OpenCode. A backup of each changed file is kept, and connected apps are updated automatically when the key, port or model list changes. New apps are added as a small class in `integrations.py`.
+The Apps tab finds supported apps on this computer and adds oc-free-api to them with one click: DeepSeek Harness and Hermes. A backup of each changed file is kept, and connected apps are updated automatically when the key, port or model list changes. New apps are added as a small class in `integrations.py`.
 
 Under Settings you can set your own fixed API key; it stays the same across restarts and updates.
 
