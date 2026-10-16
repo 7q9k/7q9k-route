@@ -1355,6 +1355,8 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/api/generate"): ("client", "_post_ollama_generate"),
     ("GET", "/api/dashboard"): ("client", "_get_dashboard_state"),
     ("GET", "/api/dashboard/stats"): ("client", "_get_dashboard_stats"),
+    # polled by dashboard tabs opened before v1.1; kept so they stay quiet
+    ("GET", "/api/dashboard/log"): ("client", "_get_dashboard_log"),
     ("POST", "/api/dashboard/test"): ("client", "_post_dashboard_test"),
     ("POST", "/api/dashboard/refresh"): ("client", "_post_refresh_models"),
     ("POST", "/api/dashboard/key"): ("local", "_post_new_key"),
@@ -1368,6 +1370,7 @@ OLLAMA_PATHS = frozenset({"/api/chat", "/api/generate", "/api/show"})
 # Successful GETs on these paths are not logged (dashboard polling, health checks).
 QUIET_PATHS = frozenset(
     {"/", "/dashboard", "/favicon.ico", "/health", "/api/dashboard", "/api/dashboard/stats",
+     "/api/dashboard/log",
      "/assets/fonts/geist.woff2", "/assets/fonts/geist-mono.woff2"}
 )
 CLIENT_GONE = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
@@ -1796,6 +1799,9 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     def _get_dashboard_stats(self) -> None:
         self._send_json(200, {"ok": True, **METRICS.snapshot()})
+
+    def _get_dashboard_log(self) -> None:
+        self._send_json(200, {"ok": True, "log": METRICS.snapshot()["log"]})
 
     def _post_refresh_models(self) -> None:
         models = available_models(refresh=True)

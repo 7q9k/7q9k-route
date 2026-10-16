@@ -377,6 +377,7 @@ class ServerTests(unittest.TestCase):
     def test_requests_are_logged_and_counted(self):
         self.request("POST", "/v1/chat/completions", {"model": "big-pickle"})
         self.request("GET", "/api/dashboard/stats")  # quiet path, not logged
+        self.request("GET", "/api/dashboard/log")  # old dashboards poll this
         self.settle()
         stats = json.loads(self.request("GET", "/api/dashboard/stats")[1])
         self.assertEqual(stats["requests"], 1)
