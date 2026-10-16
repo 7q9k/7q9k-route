@@ -3,3 +3,4 @@ models.json
 examples/demo-workspace/
 *.pyc
 __pycache__/
+hermes-oc-free-provider/
