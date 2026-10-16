@@ -1,120 +1,525 @@
 ﻿<!doctype html>
-<html lang="de">
+<html lang="de" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>oc-free-api</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230b0b0c'/%3E%3Ccircle cx='8' cy='8' r='2.5' fill='%234ade80'/%3E%3C/svg%3E">
+<script>try{ const t=localStorage.getItem('ocfree.theme'); if(t) document.documentElement.dataset.theme=t; }catch{}</script>
 <style>
-  :root{ color-scheme: dark; --line:#262c36; --mut:#8b949e; --accent:#3fb950; }
-  *{ box-sizing:border-box; }
-  body{ margin:0; background:#0d1117; color:#d8dde3; font:15px/1.55 "Segoe UI",system-ui,sans-serif; }
-  main{ max-width:640px; margin:0 auto; padding:48px 24px 64px; }
-  h1{ font-size:16px; font-weight:600; margin:0; display:flex; align-items:center; gap:9px; }
-  .dot{ width:8px; height:8px; border-radius:50%; background:var(--accent); }
-  .dot.down{ background:#f85149; }
-  small{ color:var(--mut); font-weight:400; }
-  section{ margin-top:34px; padding-top:22px; border-top:1px solid var(--line); }
-  h2{ margin:0 0 12px; font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--mut); }
-  .row{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; padding:5px 0; }
-  .row .label{ color:var(--mut); font-size:13px; flex:0 0 auto; }
-  .row code{ font:13px "Cascadia Code",ui-monospace,Consolas,monospace; overflow-wrap:anywhere; }
-  button{ font:inherit; font-size:12px; background:#161b22; border:1px solid var(--line); border-radius:6px; padding:3px 10px; cursor:pointer; color:#d8dde3; }
-  button:hover{ border-color:#3d444d; }
-  button.accent{ color:var(--accent); border-color:var(--accent); }
-  button.danger{ color:#f85149; border-color:#5c312e; }
-  button:disabled{ opacity:.4; cursor:wait; }
-  .test{ min-width:56px; }
-  .res{ color:var(--mut); font-size:12px; text-align:right; overflow-wrap:anywhere; }
-  .res.ok{ color:var(--accent); } .res.err{ color:#f85149; }
-  #log{ font:12px/1.7 "Cascadia Code",ui-monospace,Consolas,monospace; color:#9aa4af; max-height:220px; overflow:auto; white-space:pre-wrap; }
-  .actions{ display:flex; gap:8px; flex-wrap:wrap; }
-  details summary{ cursor:pointer; color:var(--mut); font-size:12px; margin-top:10px; outline:none; }
-  pre{ margin:10px 0 0; background:#12161c; border:1px solid var(--line); border-radius:8px; padding:12px; font:12px/1.6 ui-monospace,Consolas,monospace; overflow-x:auto; }
-  footer{ margin-top:40px; color:var(--mut); font-size:12px; }
-  #toast{ position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#232a33; color:#d8dde3; border:1px solid var(--line); border-radius:6px; padding:7px 14px; font-size:12px; opacity:0; transition:opacity .25s; pointer-events:none; }
+  @font-face{ font-family:'Geist'; src:url('/assets/fonts/geist.woff2') format('woff2'); font-weight:100 900; font-display:swap; }
+  @font-face{ font-family:'Geist Mono'; src:url('/assets/fonts/geist-mono.woff2') format('woff2'); font-weight:100 900; font-display:swap; }
+
+  /* ---- Tokens: monochrom, eine Signalfarbe nur für Zustand ---- */
+  :root{
+    --col:760px; --gap-section:64px; --r-field:12px; --r-pill:999px; --btn-h:40px;
+    --sans:'Geist',ui-sans-serif,system-ui,'Segoe UI',sans-serif;
+    --mono:'Geist Mono',ui-monospace,'Cascadia Code',Consolas,monospace;
+    --ease:cubic-bezier(.16,1,.3,1);
+    --bg:#f6f6f5; --field:#ffffff; --line:#e6e6e4; --line-2:#d4d4d1;
+    --text:#111112; --text-2:#45464a; --muted:#8a8b90; --bad:#c2261d; --signal:#15803d;
+    color-scheme:light;
+  }
+  :root[data-theme='dark']{
+    --bg:#0b0b0c; --field:#141416; --line:#222225; --line-2:#313135;
+    --text:#ededee; --text-2:#b7b8bd; --muted:#75767c; --bad:#f87171; --signal:#4ade80;
+    color-scheme:dark;
+  }
+  :root{ --primary:var(--text); --primary-ink:var(--bg); --focus-glow:0 0 0 4px color-mix(in srgb,var(--text) 6%,transparent); }
+
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  [hidden]{ display:none !important; }
+  html,body{ margin:0; background:var(--bg); }
+  body{ min-height:100dvh; color:var(--text); font:15px/1.55 var(--sans); -webkit-font-smoothing:antialiased; }
+  button,input,select,textarea{ font:inherit; color:inherit; }
+  button{ cursor:pointer; }
+  :focus-visible{ outline:2px solid var(--signal); outline-offset:2px; border-radius:6px; }
+  .mono{ font-family:var(--mono); }
+  .num{ font-variant-numeric:tabular-nums; }
+
+  /* ---- Kopfzeile ---- */
+  .top{ height:72px; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:0 clamp(16px,4vw,40px); }
+  .brand{ font-weight:650; font-size:17px; letter-spacing:-.03em; white-space:nowrap; }
+  .brand span{ color:var(--signal); }
+  .top-right{ display:flex; align-items:center; gap:18px; font-size:13px; color:var(--muted); }
+  .state b{ font-weight:550; color:var(--signal); }
+  .state.down b{ color:var(--bad); }
+  .text-btn{ display:inline-flex; align-items:center; gap:6px; padding:2px 0; border:0; background:none; font-size:13px; color:var(--muted); transition:color .2s; }
+  .text-btn:hover{ color:var(--text); }
+  .text-btn:disabled{ opacity:.5; cursor:progress; }
+
+  /* ---- Spalte ---- */
+  .col{ width:min(var(--col),100% - 32px); margin:0 auto; padding:clamp(24px,7vh,72px) 0 80px; }
+  .section{ margin-top:var(--gap-section); }
+  .section-head{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; padding-bottom:10px; border-bottom:1px solid var(--line); }
+  .section-head h2{ margin:0; font-size:13px; font-weight:500; color:var(--muted); letter-spacing:0; }
+  .section-head .tools{ display:flex; gap:16px; align-items:center; }
+  .title{ margin:0 0 6px; font-size:clamp(24px,4vw,30px); font-weight:650; line-height:1.2; letter-spacing:-.03em; }
+  .lead{ margin:0; font-size:15.5px; color:var(--text-2); }
+
+  /* ---- Kennzahlen: Zahlen in einer Zeile, keine Kästen ---- */
+  .stats{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); margin-top:40px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  .stat{ padding:18px 0 16px; min-width:0; }
+  .stat + .stat{ padding-left:20px; border-left:1px solid var(--line); }
+  .stat .v{ font-size:26px; font-weight:600; letter-spacing:-.03em; line-height:1.2; font-variant-numeric:tabular-nums; }
+  .stat .v.bad{ color:var(--bad); }
+  .stat .l{ font-size:13px; color:var(--muted); }
+  .stat .h{ font-size:12.5px; color:var(--muted); margin-top:2px; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  /* ---- Verlauf ---- */
+  .chart{ position:relative; height:96px; margin-top:22px; }
+  .chart svg{ display:block; width:100%; height:100%; overflow:visible; }
+  .chart .axis{ fill:var(--muted); font:10.5px var(--mono); }
+  .chart .base{ stroke:var(--line); }
+  .chart rect.b{ fill:var(--text-2); opacity:.55; }
+  .chart rect.e{ fill:var(--bad); }
+  .chart g.col:hover rect.b{ opacity:.9; }
+  .chart .empty-note{ position:absolute; inset:0 0 18px; display:grid; place-items:center; color:var(--muted); font-size:13px; }
+  .tip{ position:absolute; pointer-events:none; padding:6px 10px; border-radius:8px; background:var(--primary); color:var(--primary-ink); font-size:12.5px; white-space:nowrap; transform:translate(-50%,calc(-100% - 8px)); opacity:0; transition:opacity .12s; z-index:3; }
+  .chart-cap{ display:flex; justify-content:space-between; margin-top:6px; font-size:12.5px; color:var(--muted); }
+
+  /* ---- Zeilen (Verbindung) ---- */
+  .rows{ margin:0; padding:0; list-style:none; }
+  .rows li{ display:grid; grid-template-columns:150px minmax(0,1fr) auto; gap:16px; align-items:center; padding:12px 0; border-bottom:1px solid var(--line); }
+  .rows .k{ font-size:13.5px; color:var(--muted); }
+  .rows .v{ font:13.5px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rows .a{ display:flex; gap:16px; }
+  .hint{ margin:12px 0 0; font-size:13.5px; color:var(--muted); }
+
+  /* ---- Segment-Umschalter + Code ---- */
+  .mode{ display:inline-flex; gap:2px; padding:3px; border:1px solid var(--line); border-radius:var(--r-pill); }
+  .mode button{ padding:3px 12px; border:0; border-radius:var(--r-pill); background:transparent; font-size:13px; color:var(--muted); transition:color .2s, background .2s; }
+  .mode button:hover{ color:var(--text); }
+  .mode button[aria-checked=true]{ background:var(--primary); color:var(--primary-ink); }
+  .code-head{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:28px; }
+  pre.code{ margin:14px 0 0; padding:0 0 16px; border-bottom:1px solid var(--line); font:12.5px/1.7 var(--mono); color:var(--text-2); overflow-x:auto; }
+
+  /* ---- Felder + Buttons ---- */
+  .btn{ display:inline-flex; align-items:center; justify-content:center; gap:8px; height:var(--btn-h); padding:0 18px; border:1px solid var(--line-2); border-radius:var(--r-field); background:transparent; font-size:14px; font-weight:550; white-space:nowrap; transition:transform .15s var(--ease), border-color .2s, background .2s, color .2s; }
+  .btn:hover{ border-color:var(--text); }
+  .btn:active{ transform:scale(.985); }
+  .btn.primary{ background:var(--primary); border-color:var(--primary); color:var(--primary-ink); }
+  .btn.danger{ color:var(--bad); }
+  .btn.danger:hover{ border-color:var(--bad); }
+  .btn:disabled{ opacity:.45; cursor:progress; }
+  .armed{ color:var(--bad) !important; border-color:var(--bad) !important; background:color-mix(in srgb,var(--bad) 12%,transparent) !important; }
+  .actions{ display:flex; align-items:center; gap:8px; }
+  .compose{ margin-top:20px; border:1px solid var(--line-2); border-radius:var(--r-field); background:var(--field); transition:border-color .2s, box-shadow .2s; }
+  .compose:focus-within{ border-color:var(--text); box-shadow:var(--focus-glow); }
+  .compose textarea{ display:block; width:100%; min-height:88px; padding:14px 16px 6px; border:0; outline:0; background:transparent; resize:vertical; font-size:15px; line-height:1.5; }
+  .compose textarea::placeholder{ color:var(--muted); }
+  .compose-bar{ display:flex; justify-content:space-between; align-items:center; gap:12px; padding:8px 8px 8px 12px; }
+  .select{ height:32px; min-width:0; max-width:62%; padding:0 10px; border:1px solid var(--line); border-radius:var(--r-pill); background:transparent; font:12.5px var(--mono); color:var(--text-2); outline:0; }
+  .select:focus{ border-color:var(--text); }
+  .select option{ background:var(--field); color:var(--text); }
+  .answer{ margin-top:28px; padding-top:20px; border-top:1px solid var(--line); animation:rise .4s var(--ease); }
+  .answer .meta{ font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .answer .think{ margin-top:10px; padding-left:12px; border-left:2px solid var(--line-2); color:var(--muted); font-size:13.5px; white-space:pre-wrap; max-height:160px; overflow:auto; }
+  .answer .text{ margin-top:10px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:15px; line-height:1.6; }
+  .answer .err{ margin-top:10px; color:var(--bad); font-size:14px; }
+  .bar{ height:2px; margin-top:12px; overflow:hidden; border-radius:2px; background:var(--line); }
+  .bar i{ display:block; width:30%; height:100%; background:var(--signal); animation:indet 1.2s var(--ease) infinite; }
+
+  /* ---- Listen (Modelle, Aktivität) ---- */
+  .list{ margin:0; padding:0; list-style:none; }
+  .list li{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:center; padding:12px 0; border-bottom:1px solid var(--line); }
+  .list li:last-child{ border-bottom:0; }
+  .l-title{ font:13.5px var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .l-sub{ display:flex; flex-wrap:wrap; gap:2px 12px; margin-top:1px; font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .l-sub .bad{ color:var(--bad); }
+  .l-act{ display:flex; align-items:center; gap:14px; font-size:12.5px; }
+  .res{ color:var(--muted); font-variant-numeric:tabular-nums; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .res.ok{ color:var(--signal); } .res.bad{ color:var(--bad); }
+  .log li{ grid-template-columns:64px minmax(0,1fr) auto; padding:10px 0; }
+  .log .t{ font:12.5px var(--mono); color:var(--muted); }
+  .log .code{ font:12.5px var(--mono); color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .log .code.bad{ color:var(--bad); }
+  .log .errline{ color:var(--bad); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+  .empty-row{ padding:20px 0; font-size:13.5px; color:var(--muted); }
+  .scroll{ max-height:420px; overflow:auto; }
+
+  .foot{ margin-top:var(--gap-section); padding-top:16px; border-top:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; font-size:13px; color:var(--muted); }
+
+  /* ---- Key-Eingabe bei Zugriff aus dem Netzwerk ---- */
+  .gate .field{ display:flex; align-items:center; gap:8px; height:56px; margin-top:28px; padding:0 8px 0 16px; border:1px solid var(--line-2); border-radius:var(--r-field); background:var(--field); }
+  .gate .field:focus-within{ border-color:var(--text); box-shadow:var(--focus-glow); }
+  .gate input{ flex:1; min-width:0; height:100%; border:0; outline:0; background:transparent; font:15px var(--mono); }
+  .gate .hint.bad{ color:var(--bad); }
+
+  .toast{ position:fixed; left:50%; bottom:28px; z-index:30; transform:translateX(-50%); padding:10px 16px; border-radius:var(--r-field); background:var(--primary); color:var(--primary-ink); font-size:14px; font-weight:500; animation:toastrise .3s var(--ease); }
+
+  @keyframes rise{ from{ opacity:0; transform:translateY(6px); } }
+  @keyframes toastrise{ from{ opacity:0; transform:translate(-50%,6px); } }
+  @keyframes indet{ 0%{ transform:translateX(-110%); } 100%{ transform:translateX(350%); } }
+  @media (prefers-reduced-motion:reduce){ *,*::before,*::after{ animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; } }
+
+  @media (max-width:640px){
+    .stats{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .stat:nth-child(3){ padding-left:0; border-left:0; }
+    .stat:nth-child(n+3){ border-top:1px solid var(--line); }
+    .rows li{ grid-template-columns:minmax(0,1fr) auto; gap:2px 16px; }
+    .rows .k{ grid-column:1 / -1; font-size:12.5px; }
+    .top-right .uptime{ display:none; }
+    .section-head{ flex-wrap:wrap; }
+    .code-head{ flex-direction:column; align-items:flex-start; }
+    .log li{ grid-template-columns:minmax(0,1fr) auto; }
+    .log .t{ display:none; }
+    .res{ max-width:110px; }
+    #modelSource{ display:none; }
+  }
 </style>
 </head>
 <body>
-<main>
-  <h1><span id="dot" class="dot"></span> oc-free-api <small>┬╖ OpenCode free models</small></h1>
+<header class="top">
+  <div class="brand">oc-free-api<span>.</span></div>
+  <div class="top-right">
+    <span class="uptime num" id="uptime"></span>
+    <span class="state" id="state"><b>Verbinde</b></span>
+    <button class="text-btn" id="theme" aria-label="Hell oder dunkel">Hell</button>
+  </div>
+</header>
 
-  <section>
-    <h2>Zugang</h2>
-    <div class="row"><span class="label">Dashboard (diese Seite)</span><code id="urlDash"></code></div>
-    <div class="row"><span class="label">OpenAI-Base-URL</span><code id="urlOpenai"></code><button data-copy="urlOpenai">Kopieren</button></div>
-    <div class="row" id="rowLan" hidden><span class="label">Netzwerk</span><code id="urlLan"></code></div>
-    <div class="row"><span class="label">API-Key</span><code id="apiKey"></code><button data-copy="apiKey">Kopieren</button></div>
+<main class="col">
+  <!-- Zugriff aus dem Netzwerk: Key eingeben -->
+  <section class="gate" id="gate" hidden>
+    <h1 class="title">API-Key eingeben</h1>
+    <p class="lead">Du greifst über das Netzwerk zu. Der Key steht in <span class="mono">api-key.txt</span> auf dem Server-Rechner.</p>
+    <form id="gateForm" class="field">
+      <input id="gateKey" placeholder="sk-oc-free-…" autocomplete="off" spellcheck="false" aria-label="API-Key">
+      <button class="btn primary" type="submit">Verbinden</button>
+    </form>
+    <p class="hint" id="gateHint" aria-live="polite"></p>
   </section>
 
-  <section>
-    <h2>Modelle ΓÇö Test-Button sendet eine echte Anfrage</h2>
-    <table style="width:100%; border-collapse:collapse" id="tbl"></table>
-  </section>
+  <div id="app" hidden>
+    <h1 class="title">Übersicht</h1>
+    <p class="lead">OpenCode-Gratis-Modelle über eine OpenAI- und Ollama-kompatible Schnittstelle.</p>
 
-  <section>
-    <h2>Live-Log</h2>
-    <div id="log">ΓÇô</div>
-  </section>
-
-  <section>
-    <div class="actions">
-      <button class="accent" id="btnRefresh">Modelle aktualisieren</button>
-      <button id="btnKey">Key neu generieren</button>
-      <button class="danger" id="btnStop">Server stoppen</button>
+    <div class="stats">
+      <div class="stat"><div class="l">Anfragen</div><div class="v" id="kReq">0</div><div class="h" id="kReqHint">&nbsp;</div></div>
+      <div class="stat"><div class="l">Fehlerquote</div><div class="v" id="kErr">–</div><div class="h" id="kErrHint">&nbsp;</div></div>
+      <div class="stat"><div class="l">Tokens</div><div class="v" id="kTok">0</div><div class="h" id="kTokHint">&nbsp;</div></div>
+      <div class="stat"><div class="l">Ø Antwortzeit</div><div class="v" id="kLat">–</div><div class="h" id="kLatHint">&nbsp;</div></div>
     </div>
-    <details>
-      <summary>Client-Snippet (Python, OpenAI-kompatibel)</summary>
-      <pre id="snip"></pre>
-    </details>
-  </section>
+    <div class="chart" id="chart" role="img" aria-label="Anfragen pro Minute in den letzten 30 Minuten"><div class="tip" id="tip"></div></div>
+    <div class="chart-cap"><span>Anfragen pro Minute · letzte 30 Minuten</span><span id="chartErr"></span></div>
 
-  <footer>Pers├╢nliche Nutzung ┬╖ <code id="status" class="res"></code></footer>
+    <section class="section">
+      <div class="section-head"><h2>Verbindung</h2></div>
+      <ul class="rows">
+        <li><span class="k">OpenAI-Base-URL</span><span class="v" id="urlOpenai">–</span><span class="a"><button class="text-btn" data-copy="urlOpenai">Kopieren</button></span></li>
+        <li><span class="k">Ollama-URL</span><span class="v" id="urlOllama">–</span><span class="a"><button class="text-btn" data-copy="urlOllama">Kopieren</button></span></li>
+        <li id="rowLan" hidden><span class="k">Im Netzwerk</span><span class="v" id="urlLan">–</span><span class="a"><button class="text-btn" data-copy="urlLan">Kopieren</button></span></li>
+        <li><span class="k">API-Key</span><span class="v" id="apiKey">–</span><span class="a"><button class="text-btn" id="btnReveal">Zeigen</button><button class="text-btn" id="btnCopyKey">Kopieren</button></span></li>
+      </ul>
+      <p class="hint" id="accessNote"></p>
+
+      <div class="code-head">
+        <div class="mode" role="radiogroup" aria-label="Beispiel" id="tabs">
+          <button role="radio" data-tab="python" aria-checked="true">Python</button>
+          <button role="radio" data-tab="curl" aria-checked="false">curl</button>
+          <button role="radio" data-tab="opencode" aria-checked="false">OpenCode</button>
+          <button role="radio" data-tab="ollama" aria-checked="false">Ollama</button>
+        </div>
+        <button class="text-btn" id="btnSnip">Beispiel kopieren</button>
+      </div>
+      <pre class="code" id="snip"></pre>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Ausprobieren</h2></div>
+      <div class="compose">
+        <textarea id="pgPrompt" placeholder="Nachricht an das Modell" aria-label="Nachricht">Erkläre in zwei Sätzen, was ein Reverse-Proxy ist.</textarea>
+        <div class="compose-bar">
+          <select class="select" id="pgModel" aria-label="Modell"></select>
+          <span class="actions"><button class="btn" id="pgStop" hidden>Abbrechen</button><button class="btn primary" id="pgSend">Senden</button></span>
+        </div>
+      </div>
+      <p class="hint">Strg + Enter sendet. Gratis-Modelle dürfen Eingaben zum Training nutzen, also keine Geheimnisse senden.</p>
+      <div class="answer" id="pgOut" hidden aria-live="polite"></div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Modelle <span class="num" id="modelCount"></span></h2>
+        <span class="tools"><span class="text-btn" id="modelSource" style="cursor:default"></span><button class="text-btn" id="btnRefresh">Liste aktualisieren</button><button class="text-btn" id="btnTestAll">Alle testen</button></span>
+      </div>
+      <ul class="list" id="models"></ul>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Aktivität</h2>
+        <div class="mode" role="radiogroup" aria-label="Filter" id="logFilter">
+          <button role="radio" data-f="all" aria-checked="true">Alle</button>
+          <button role="radio" data-f="err" aria-checked="false">Fehler</button>
+        </div>
+      </div>
+      <div class="scroll"><ul class="list log" id="log"></ul></div>
+    </section>
+
+    <footer class="foot">
+      <span>Nur für den persönlichen Gebrauch. Den Zugang nicht an andere weitergeben.</span>
+      <span class="actions" id="localActions" hidden>
+        <button class="btn" id="btnKey">Neuen Key erzeugen</button>
+        <button class="btn danger" id="btnStop">Server stoppen</button>
+      </span>
+    </footer>
+  </div>
 </main>
-<div id="toast"></div>
-<script>
-const $=id=>document.getElementById(id);
-const toast=m=>{const t=$('toast');t.textContent=m;t.style.opacity=1;clearTimeout(t._h);t._h=setTimeout(()=>t.style.opacity=0,1500)};
-document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>{navigator.clipboard.writeText($(b.dataset.copy).textContent.trim());toast('kopiert')});
 
-async function api(p,body){
-  const r=await fetch(p,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
-  const j=await r.json();
-  if(!r.ok||j.ok===false) throw new Error((j.error&&j.error.message)||j.message||('HTTP '+r.status));
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = n => n == null ? '–' : n >= 1e6 ? (n/1e6).toLocaleString('de-DE',{maximumFractionDigits:1})+' Mio.' : n >= 1e4 ? (n/1e3).toLocaleString('de-DE',{maximumFractionDigits:1})+' Tsd.' : n.toLocaleString('de-DE');
+const fmtMs = ms => ms == null ? '–' : ms >= 1000 ? (ms/1000).toLocaleString('de-DE',{maximumFractionDigits:1})+' s' : ms+' ms';
+const fmtDur = s => { const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60); return d ? `${d} T ${h} Std.` : h ? `${h} Std. ${m} Min.` : m ? `${m} Min.` : `${s} Sek.`; };
+
+// ---- Theme (Standard dunkel, Wahl wird gemerkt)
+function applyThemeLabel(){ $('theme').textContent = document.documentElement.dataset.theme === 'dark' ? 'Hell' : 'Dunkel'; }
+$('theme').onclick = () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; try{ localStorage.setItem('ocfree.theme', t) }catch{} applyThemeLabel(); };
+applyThemeLabel();
+
+let toastTimer;
+function toast(msg){ document.querySelector('.toast')?.remove(); const t=document.createElement('div'); t.className='toast'; t.setAttribute('role','status'); t.textContent=msg; document.body.append(t); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.remove(),2200); }
+
+// Gefährliche Aktionen: erster Klick schaltet scharf, zweiter führt aus.
+function armed(btn, label, fn){
+  btn.onclick = async () => {
+    if (!btn.classList.contains('armed')) {
+      btn.dataset.label = btn.textContent; btn.textContent = label; btn.classList.add('armed');
+      btn._t = setTimeout(()=>{ btn.classList.remove('armed'); btn.textContent = btn.dataset.label; }, 3000);
+      return;
+    }
+    clearTimeout(btn._t); btn.classList.remove('armed'); btn.textContent = btn.dataset.label;
+    await busy(btn, fn);
+  };
+}
+
+// ---- Key: nur nötig beim Zugriff von einem anderen Gerät
+const store = { get(){ try{ return localStorage.getItem('ocfree.key')||'' }catch{ return '' } }, set(v){ try{ v?localStorage.setItem('ocfree.key',v):localStorage.removeItem('ocfree.key') }catch{} } };
+let remoteKey = store.get();
+const authHeaders = (extra={}) => remoteKey ? {...extra, Authorization:'Bearer '+remoteKey} : extra;
+
+class AuthError extends Error {}
+async function api(path, body){
+  const opts = body === undefined ? {headers:authHeaders()} : {method:'POST', headers:authHeaders({'Content-Type':'application/json'}), body:JSON.stringify(body)};
+  const r = await fetch(path, opts);
+  let j = {}; try{ j = await r.json() }catch{}
+  if (r.status === 401) throw new AuthError(j.error?.message || 'API-Key fehlt');
+  if (!r.ok || j.ok === false) throw new Error(j.error?.message || j.error || ('HTTP '+r.status));
   return j;
 }
+async function busy(btn, fn){ btn.disabled=true; try{ await fn(); }catch(e){ if (e instanceof AuthError) showGate(e.message); else toast(e.message); } finally{ btn.disabled=false; } }
 
-function render(d){
-  $('dot').classList.remove('down');
-  $('urlDash').textContent=location.origin;
-  $('urlOpenai').textContent=location.origin+'/v1';
-  if(d.lan_ip){ $('rowLan').hidden=false; $('urlLan').textContent='http://'+d.lan_ip+':'+location.port+'/'; }
-  $('apiKey').textContent=d.api_key;
-  $('snip').textContent=`from openai import OpenAI\nclient=OpenAI(\n    base_url="${location.origin}/v1",\n    api_key="${d.api_key}",\n)\nr=client.chat.completions.create(model="big-pickle",\n    messages=[{"role":"user","content":"hi"}])`;
-  const tb=$('tbl'); tb.innerHTML='';
-  (d.models||[]).forEach(m=>{
-    const tr=document.createElement('tr'); tr.style.borderBottom='1px solid var(--line)';
-    tr.innerHTML=`<td style="padding:6px 0; font:13px ui-monospace,monospace">${m}</td>`+
-      `<td style="width:120px; text-align:right"><button class="test" data-m="${m}">Test</button></td>`+
-      `<td style="width:52%"><span class="res" id="res"></span></td>`;
-    tb.appendChild(tr);
-    tr.querySelector('button').onclick=e=>testModel(m,tr.querySelector('.res'),e.target);
+let state=null, stats=null, revealed=false, tab='python', logFilter='all';
+
+function setState(ok){
+  const s=$('state'); s.classList.toggle('down', !ok);
+  s.innerHTML = ok ? `<b>Läuft</b>${state && !state.local ? ' · über Netzwerk' : ''}` : '<b>Nicht erreichbar</b>';
+}
+const keyText = () => state?.local ? state.api_key : remoteKey;
+
+function renderAccess(){
+  const o=location.origin;
+  $('urlOpenai').textContent = o+'/v1';
+  $('urlOllama').textContent = o;
+  const lan = state.lan_ip && state.lan_ip !== '127.0.0.1' ? `http://${state.lan_ip}:${state.port}/v1` : null;
+  $('rowLan').hidden = !lan; if (lan) $('urlLan').textContent = lan;
+  const k = keyText() || '';
+  $('apiKey').textContent = revealed ? k : (k ? k.slice(0,11)+'•'.repeat(16)+k.slice(-4) : '–');
+  $('btnReveal').textContent = revealed ? 'Verbergen' : 'Zeigen';
+  $('localActions').hidden = !state.local;
+  $('accessNote').textContent = !state.local
+    ? 'Du bist über das Netzwerk verbunden. Jede Anfrage braucht den API-Key.'
+    : state.lan_ip ? 'Auf diesem Rechner geht es ohne Key. Andere Geräte im Netzwerk brauchen ihn.'
+    : 'Der Server ist nur auf diesem Rechner erreichbar.';
+  renderSnippet();
+}
+
+function renderSnippet(){
+  if (!state) return;
+  const base=location.origin, k=keyText()||'', m=state.default_model;
+  const shown = revealed && k ? k : '<API-Key aus api-key.txt>';
+  const s = {
+    python:`from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${base}/v1",\n    api_key="${shown}",\n)\nresp = client.chat.completions.create(\n    model="${m}",\n    messages=[{"role": "user", "content": "Hallo"}],\n)\nprint(resp.choices[0].message.content)`,
+    curl:`curl ${base}/v1/chat/completions \\\n  -H "Authorization: Bearer ${shown}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${m}","messages":[{"role":"user","content":"Hallo"}]}'`,
+    opencode:`{\n  "$schema": "https://opencode.ai/config.json",\n  "provider": {\n    "oc-free": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "OpenCode Free (lokaler Proxy)",\n      "options": {\n        "baseURL": "${base}/v1",\n        "apiKey": "${shown}"\n      },\n      "models": { "${m}": { "name": "${m}" } }\n    }\n  }\n}`,
+    ollama:`# Ollama-Clients (Open WebUI, Continue …): Basis-URL ohne /v1\nOLLAMA_HOST=${base}\n\ncurl ${base}/api/chat -d '{\n  "model": "${m}",\n  "messages": [{"role": "user", "content": "Hallo"}]\n}'`,
+  };
+  $('snip').textContent = s[tab];
+  $('snip').dataset.copy = k ? s[tab].replaceAll(shown, k) : s[tab];
+}
+
+function renderModels(){
+  if (!state) return;
+  const ul=$('models'), per=stats?.models||{}, ids=state.models.map(m=>m.id);
+  if ([...ul.children].map(li=>li.dataset.m).join() !== ids.join()){
+    ul.innerHTML = state.models.map(m=>`<li data-m="${esc(m.id)}"><div style="min-width:0"><div class="l-title">${esc(m.id)}</div><div class="l-sub" data-f="sub"></div></div><div class="l-act"><span class="res" data-f="res"></span><button class="text-btn" data-test>Testen</button></div></li>`).join('');
+    ul.querySelectorAll('[data-test]').forEach(b=>b.onclick=()=>testModel(b.closest('li')));
+    const sel=$('pgModel'), cur=sel.value||state.default_model;
+    sel.innerHTML = ids.map(id=>`<option>${esc(id)}</option>`).join('');
+    sel.value = ids.includes(cur) ? cur : ids[0];
+  }
+  for (const li of ul.children){
+    const api = state.models.find(m=>m.id===li.dataset.m)?.api === 'responses' ? 'Responses-API' : 'Chat-API';
+    const s = per[li.dataset.m];
+    li.querySelector('[data-f=sub]').innerHTML = `<span>${api}</span>` + (s
+      ? `<span>${fmt(s.requests)} Anfragen</span>${s.errors?`<span class="bad">${fmt(s.errors)} Fehler</span>`:''}<span>Ø ${fmtMs(s.avg_ms)}</span><span>${fmt(s.tokens)} Tokens</span>`
+      : '<span>noch nicht genutzt</span>');
+  }
+  $('modelCount').textContent = '· '+ids.length;
+  const src = state.model_list||{};
+  const label = {live:'Live abgefragt', cache:'Aus dem Cache', fallback:'Standardliste'}[src.source]||'';
+  $('modelSource').textContent = label + (src.updated ? ' '+new Date(src.updated*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) : '');
+}
+
+async function testModel(li){
+  const btn=li.querySelector('[data-test]'), res=li.querySelector('[data-f=res]');
+  btn.disabled=true; res.className='res'; res.textContent='Wird getestet';
+  try{
+    const r = await api('/api/dashboard/test', {model: li.dataset.m});
+    res.classList.add('ok'); res.textContent = `Antwortet · ${fmtMs(r.latency_ms)}`; res.title = r.text;
+  }catch(e){
+    if (e instanceof AuthError) return showGate(e.message);
+    res.classList.add('bad'); res.textContent = 'Fehler'; res.title = e.message;
+  }finally{ btn.disabled=false; refreshStats(); }
+}
+
+function renderStats(){
+  const s=stats; if(!s) return;
+  $('kReq').textContent = fmt(s.requests);
+  $('kReqHint').textContent = `${s.timeline.slice(-5).reduce((a,b)=>a+b.requests,0)} in 5 Minuten`;
+  const rate = s.requests ? s.errors/s.requests*100 : 0;
+  $('kErr').textContent = s.requests ? rate.toLocaleString('de-DE',{maximumFractionDigits:1})+' %' : '–';
+  $('kErr').classList.toggle('bad', rate >= 10);
+  $('kErrHint').textContent = s.errors ? `${fmt(s.errors)} fehlgeschlagen` : 'keine Fehler';
+  $('kTok').textContent = fmt(s.tokens_in + s.tokens_out);
+  $('kTokHint').textContent = `${fmt(s.tokens_in)} rein · ${fmt(s.tokens_out)} raus`;
+  $('kLat').textContent = fmtMs(s.avg_ms);
+  const last=[...s.log].reverse().find(e=>e.model);
+  $('kLatHint').textContent = last ? `zuletzt ${fmtMs(last.ms)}` : 'noch keine Anfrage';
+  $('uptime').textContent = 'seit '+fmtDur(s.uptime_s);
+  const errs = s.timeline.reduce((a,b)=>a+b.errors,0);
+  $('chartErr').innerHTML = errs ? `<span style="color:var(--bad)">${errs} Fehler</span>` : '';
+  renderChart(); renderModels(); renderLog();
+}
+
+function renderChart(){
+  const el=$('chart'), data=stats?.timeline||[], n=data.length; if(!n) return;
+  const W=el.clientWidth||600, H=el.clientHeight, padL=22, padB=16;
+  const top=Math.max(2, Math.ceil(Math.max(...data.map(d=>d.requests))/2)*2);
+  const ih=H-padB-2, slot=(W-padL)/n, bw=Math.max(2, slot-3), rx=Math.min(2, bw/2);
+  const y=v=>2+ih-(v/top)*ih;
+  let svg=`<svg viewBox="0 0 ${W} ${H}" aria-hidden="true"><line class="base" x1="${padL}" x2="${W}" y1="${y(0)}" y2="${y(0)}"/>`;
+  svg += `<text class="axis" x="${padL-6}" y="${y(top)+4}" text-anchor="end">${top}</text><text class="axis" x="${padL-6}" y="${y(0)+3}" text-anchor="end">0</text>`;
+  data.forEach((d,i)=>{
+    const x=padL+i*slot+1.5;
+    svg += `<g class="col" data-i="${i}"><rect x="${padL+i*slot}" y="0" width="${slot}" height="${ih+2}" fill="transparent"/>`;
+    if (d.requests) svg += `<rect class="b" x="${x}" y="${y(d.requests)}" width="${bw}" height="${ih*(d.requests/top)}" rx="${rx}"/>`;
+    if (d.errors) svg += `<rect class="e" x="${x}" y="${y(d.errors)}" width="${bw}" height="${ih*(d.errors/top)}" rx="${rx}"/>`;
+    svg += '</g>';
   });
-  $('log').textContent=(d.log||[]).slice(-60).map(e=>e.t+'  '+e.msg).join('\n')||'ΓÇô';
-  $('log').scrollTop=1e9;
+  svg += `<text class="axis" x="${padL}" y="${H-2}">vor 30 Min.</text><text class="axis" x="${W}" y="${H-2}" text-anchor="end">jetzt</text></svg>`;
+  el.querySelectorAll('svg,.empty-note').forEach(x=>x.remove());
+  el.insertAdjacentHTML('beforeend', svg);
+  if (!data.some(d=>d.requests)) el.insertAdjacentHTML('beforeend','<div class="empty-note">Noch keine Anfragen in den letzten 30 Minuten</div>');
+  const tip=$('tip');
+  el.querySelectorAll('g.col').forEach(g=>{
+    g.onmouseenter=()=>{ const i=+g.dataset.i, d=data[i], ago=n-1-i;
+      tip.textContent = `${d.requests} Anfragen${d.errors?`, ${d.errors} Fehler`:''} · ${ago?`vor ${ago} Min.`:'diese Minute'}`;
+      tip.style.left=(padL+(i+.5)*slot)+'px'; tip.style.top=y(d.requests)+'px'; tip.style.opacity=1; };
+    g.onmouseleave=()=>tip.style.opacity=0;
+  });
 }
-async function load(){ try{ render(await api('/api/dashboard')) }catch(e){ $('dot').classList.add('down') } }
-async function testModel(m,span,btn){
-  span.className='res'; span.textContent='ΓÇª'; btn.disabled=true;
-  try{ const r=await api('/api/dashboard/test',{model:m});
-    span.classList.add('ok'); span.textContent=`${(r.latency_ms/1000).toFixed(1)}s ┬╖ ${r.tokens} tok`;
-  }catch(e){ span.classList.add('err'); span.textContent=e.message.slice(0,90); }
-  btn.disabled=false; setTimeout(load,400);
+
+function renderLog(){
+  const rows=[...(stats?.log||[])].reverse().filter(e=>logFilter==='all' || e.status>=400 || e.error).slice(0,150);
+  $('log').innerHTML = rows.length ? rows.map(e=>{
+    const bad = e.status>=400 || e.error;
+    const tok=(e.tokens_in||0)+(e.tokens_out||0);
+    const sub=[e.model, tok?fmt(tok)+' Tokens':'', e.client!=='lokal'?e.client:''].filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join('');
+    return `<li><span class="t">${esc(e.t)}</span><div style="min-width:0"><div class="l-title">${esc(e.method)} ${esc(e.path)}</div>${sub||e.error?`<div class="l-sub">${sub}${e.error?`<span class="errline" title="${esc(e.error)}">${esc(e.error.slice(0,140))}</span>`:''}</div>`:''}</div><span class="code ${bad?'bad':''}">${e.status||'—'} · ${fmtMs(e.ms)}</span></li>`;
+  }).join('') : `<li class="empty-row" style="display:block">${logFilter==='err'?'Keine Fehler.':'Noch keine Anfragen. Schick oben eine Nachricht oder teste ein Modell.'}</li>`;
 }
-$('btnRefresh').onclick=async e=>{e.target.disabled=true;try{await api('/api/dashboard/refresh',{});toast('aktualisiert');load()}catch(err){toast(err.message)}finally{e.target.disabled=false}};
-$('btnKey').onclick=async e=>{e.target.disabled=true;try{await api('/api/dashboard/key',{});toast('neuer Key aktiv');load()}catch(err){toast(err.message)}finally{e.target.disabled=false}};
-$('btnStop').onclick=async()=>{if(confirm('wirklich stoppen?')){try{await api('/api/dashboard/stop',{});toast('stoppt ΓÇª')}catch(e){}}};
-setInterval(async()=>{try{const r=await api('/api/dashboard/log');const l=$('log');l.textContent=(r.log||[]).slice(-60).map(e=>e.t+'  '+e.msg).join('\n');l.scrollTop=1e9}catch(e){}},1500);
-load();
+
+// ---- Laden
+async function loadState(){
+  try{ state = await api('/api/dashboard'); $('gate').hidden=true; $('app').hidden=false; setState(true); renderAccess(); renderModels(); }
+  catch(e){ if (e instanceof AuthError) showGate(remoteKey ? 'Der Key wurde nicht angenommen. Bitte prüfen.' : ''); else setState(false); }
+}
+async function refreshStats(){
+  if (!state) return;
+  try{ stats = await api('/api/dashboard/stats'); setState(true); renderStats(); }
+  catch(e){ if (e instanceof AuthError) showGate('Der Key ist nicht mehr gültig. Bitte den neuen eingeben.'); else setState(false); }
+}
+function showGate(msg){ state=null; $('app').hidden=true; $('gate').hidden=false; $('state').innerHTML='<b>Key nötig</b>'; const h=$('gateHint'); h.textContent=msg||''; h.classList.toggle('bad', !!msg); $('gateKey').value=remoteKey; $('gateKey').focus(); }
+$('gateForm').onsubmit = async ev => { ev.preventDefault(); remoteKey=$('gateKey').value.trim(); store.set(remoteKey); await loadState(); refreshStats(); };
+
+// ---- Aktionen
+async function copy(text){ try{ await navigator.clipboard.writeText(text.trim()); toast('Kopiert'); }catch{ toast('Kopieren ging nicht. Bitte von Hand markieren.'); } }
+document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copy($(b.dataset.copy).textContent));
+$('btnCopyKey').onclick=()=>copy(keyText()||'');
+$('btnSnip').onclick=()=>copy($('snip').dataset.copy||$('snip').textContent);
+$('btnReveal').onclick=()=>{ revealed=!revealed; renderAccess(); };
+function radio(group, onPick){ group.onclick=e=>{ const b=e.target.closest('[role=radio]'); if(!b) return; group.querySelectorAll('[role=radio]').forEach(x=>x.setAttribute('aria-checked', x===b)); onPick(b); }; }
+radio($('tabs'), b=>{ tab=b.dataset.tab; renderSnippet(); });
+radio($('logFilter'), b=>{ logFilter=b.dataset.f; renderLog(); });
+
+$('btnRefresh').onclick=e=>busy(e.currentTarget, async()=>{ const r=await api('/api/dashboard/refresh',{}); await loadState(); toast(r.source==='live'?`${r.models.length} Modelle live abgefragt`:'Abfrage fehlgeschlagen. Die bisherige Liste bleibt.'); });
+$('btnTestAll').onclick=e=>busy(e.currentTarget, async()=>{ for (const li of $('models').children) await testModel(li); });
+armed($('btnKey'), 'Wirklich neu erzeugen?', async()=>{ await api('/api/dashboard/key',{}); await loadState(); toast('Neuer Key ist aktiv. Clients brauchen ihn jetzt.'); });
+armed($('btnStop'), 'Wirklich stoppen?', async()=>{ await api('/api/dashboard/stop',{}); toast('Server wird gestoppt'); setTimeout(()=>setState(false),600); });
+
+// ---- Ausprobieren (streamt über den normalen OpenAI-Endpunkt)
+let pgAbort=null;
+async function sendPrompt(){
+  const prompt=$('pgPrompt').value.trim(); if(!prompt || pgAbort) return;
+  const model=$('pgModel').value, out=$('pgOut'), t0=performance.now();
+  out.hidden=false;
+  out.innerHTML=`<div class="meta">${esc(model)} · Wird gesendet</div><div class="bar"><i></i></div><div class="think" hidden></div><div class="text"></div>`;
+  const meta=out.querySelector('.meta'), bar=out.querySelector('.bar'), think=out.querySelector('.think'), text=out.querySelector('.text');
+  pgAbort=new AbortController(); $('pgSend').disabled=true; $('pgStop').hidden=false;
+  let first=null, usage=null;
+  try{
+    const r=await fetch('/v1/chat/completions',{method:'POST',signal:pgAbort.signal,headers:authHeaders({'Content-Type':'application/json'}),
+      body:JSON.stringify({model,stream:true,messages:[{role:'user',content:prompt}]})});
+    if(!r.ok){ let j={}; try{ j=await r.json() }catch{} if(r.status===401) showGate(); throw new Error(j.error?.message||('HTTP '+r.status)); }
+    const reader=r.body.getReader(), dec=new TextDecoder(); let buf='';
+    for(;;){
+      const {value,done}=await reader.read(); if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      let i; while((i=buf.indexOf('\n\n'))>=0){
+        const ev=buf.slice(0,i).trim(); buf=buf.slice(i+2);
+        if(!ev.startsWith('data:')) continue;
+        const data=ev.slice(5).trim(); if(data==='[DONE]') continue;
+        const j=JSON.parse(data);
+        if(j.error) throw new Error(j.error.message||'Fehler vom Anbieter');
+        if(j.usage) usage=j.usage;
+        for(const c of j.choices||[]){
+          const d=c.delta||{};
+          if(d.reasoning_content){ think.hidden=false; think.textContent+=d.reasoning_content; think.scrollTop=1e9; }
+          if(d.content){ if(first==null) first=performance.now()-t0; text.textContent+=d.content; }
+        }
+        meta.textContent = `${model} · ${first!=null ? 'Schreibt' : 'Denkt nach'}`;
+      }
+    }
+    const total=Math.round(performance.now()-t0);
+    meta.textContent = `${model} · ${fmtMs(total)}` + (first!=null?` · erstes Wort nach ${fmtMs(Math.round(first))}`:'') + (usage?` · ${fmt(usage.total_tokens)} Tokens`:'');
+    if(!text.textContent && !think.textContent) text.textContent = 'Das Modell hat nichts geantwortet. Bitte ein anderes Modell versuchen.';
+  }catch(e){
+    if(e.name==='AbortError') meta.textContent=`${model} · Abgebrochen`;
+    else { meta.textContent=`${model} · Fehlgeschlagen`; const er=document.createElement('div'); er.className='err'; er.textContent=e.message+(/429/.test(e.message)?' Kurz warten und erneut senden.':''); out.append(er); }
+  }finally{
+    bar.remove(); pgAbort=null; $('pgSend').disabled=false; $('pgStop').hidden=true; refreshStats();
+  }
+}
+$('pgSend').onclick=sendPrompt;
+$('pgStop').onclick=()=>pgAbort?.abort();
+$('pgPrompt').onkeydown=e=>{ if(e.key==='Enter' && (e.ctrlKey||e.metaKey)){ e.preventDefault(); sendPrompt(); } };
+
+addEventListener('resize', ()=>stats && renderChart());
+(async()=>{ await loadState(); await refreshStats(); setInterval(refreshStats, 2500); setInterval(()=>state && loadState(), 60000); })();
 </script>
 </body>
 </html>

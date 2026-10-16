@@ -14,7 +14,8 @@ python server.py       # default: localhost + LAN (bindet auf 0.0.0.0)
 .\start.bat
 ```
 
-Nur lokal binden (LAN aus): `python server.py --host 127.0.0.1`
+Nur lokal binden (LAN aus): `python server.py --host 127.0.0.1`. Im LAN-Modus brauchen
+andere Geräte immer den API-Key (siehe unten).
 
 Beim ersten Start wird ein API-Key generiert, in `api-key.txt` gespeichert und in der
 Konsole angezeigt. Optionen:
@@ -26,24 +27,46 @@ Konsole angezeigt. Optionen:
 --refresh-models       Modell-Liste einmalig neu abfragen
 ```
 
+## Zugriff und API-Key
+
+| Woher kommt die Anfrage? | Was gilt |
+|---|---|
+| Von diesem Rechner (`127.0.0.1`) | Kein Key nötig. Clients mit Platzhalter-Keys (`ollama`, `lm-studio` …) funktionieren. |
+| Aus dem LAN | **Key immer nötig** (`Authorization: Bearer <key>` oder `x-api-key`). |
+| Von einer fremden Webseite im Browser | Gesperrt (Origin-/Host-Prüfung gegen CSRF und DNS-Rebinding). |
+
+Key neu erzeugen und Server stoppen geht nur vom Server-Rechner selbst. Ohne Key offen
+sind nur Dashboard-Seite, `/health`, Modell-Listen und die Probe-Endpunkte.
+
+## Dashboard
+
+`http://localhost:8787/` zeigt Anfragen, Fehlerquote, Tokens, Antwortzeiten, einen
+Verlauf der letzten 30 Minuten, alle Modelle mit Test-Knopf, einen Bereich zum
+Ausprobieren (gestreamt) und das Aktivitätsprotokoll. Wer das Dashboard aus dem LAN
+öffnet, wird nach dem Key gefragt; der Key selbst wird dort nie angezeigt.
+
 ## Endpoints
 
-| Pfad | Beschreibung |
-|---|---|
-| `GET /` · `GET /dashboard` | **Web-Dashboard**: Status, Key, Modelle mit Test-Button, Live-Log |
-| `POST /api/dashboard/{test,refresh,key,stop}` | Dashboard-Aktionen (Modell-Test, Model-Refresh, Key-Reset, Server stoppen) |
-| `GET /health` | Liveness-Check (ohne Auth) |
-| `GET /v1/models` · `GET /api/v1/models` | Modell-Liste (OpenAI-Format, ohne Auth) |
-| `GET /api/tags` · `GET /api/ps` · `POST /api/show` | **Ollama**-Endpoints |
-| `POST /api/chat` · `POST /api/generate` | **Ollama** Chat/Generate (Stream + Tools, kein Auth) |
-| `GET /version` · `GET /v1/props` · `GET /props` | **LM Studio / llama.cpp** Fingerabdruck-Endpoints |
-| `POST /v1/chat/completions` | OpenAI Chat Completions (Stream **und** non-Stream, Tools) |
+| Pfad | Zugriff | Beschreibung |
+|---|---|---|
+| `GET /` · `GET /dashboard` | offen | Web-Dashboard |
+| `GET /api/dashboard` · `GET /api/dashboard/stats` | Key / lokal | Status und Statistiken fürs Dashboard |
+| `POST /api/dashboard/test` · `/refresh` | Key / lokal | Modell testen, Modell-Liste neu abfragen |
+| `POST /api/dashboard/key` · `/stop` | nur lokal | Key neu erzeugen, Server stoppen |
+| `GET /health` | offen | Liveness-Check |
+| `GET /v1/models` · `GET /api/v1/models` | offen | Modell-Liste (OpenAI-Format) |
+| `GET /api/tags` · `GET /api/ps` · `POST /api/show` | offen | **Ollama**-Modell-Endpoints |
+| `POST /api/chat` · `POST /api/generate` | Key / lokal | **Ollama** Chat/Generate (streamt standardmäßig, Tools) |
+| `GET /version` · `GET /v1/props` · `GET /props` | offen | **LM Studio / llama.cpp** Probe-Endpoints |
+| `POST /v1/chat/completions` | Key / lokal | OpenAI Chat Completions (Stream und non-Stream, Tools) |
+
+Fehler mitten im Stream kommen als `data: {"error": …}` (OpenAI) bzw.
+`{"error": "…"}`-Zeile (Ollama) beim Client an. Request-Bodys sind auf 32 MB begrenzt.
 
 ### Ollama-kompatible Tools / LM Studio
 
 Der Server emuliert die Endpunkte, mit denen Clients Modelle entdecken — Listener
-einfach auf `http://127.0.0.1:8787` zeigen lassen (kein Suffix, kein Key nötig für
-`/api/*`):
+einfach auf `http://127.0.0.1:8787` zeigen lassen (kein Suffix; vom selben Rechner ohne Key, aus dem LAN mit Key).
 
 - **Ollama-Clients** (Open WebUI, Continue mit Ollama-Provider, …): Base URL
   `http://127.0.0.1:8787` — Modelle erscheinen wie lokal installierte.
@@ -86,6 +109,15 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   -d '{"model":"big-pickle","stream":false,"messages":[{"role":"user","content":"hi"}]}'
 ```
 
+## Tests
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Die Tests laufen ohne Netzwerk (Upstream wird ersetzt) und prüfen Umsetzung der Formate,
+Streaming-Fehler, Zugriffsregeln und Statistik.
+
 ## Agenten-Coding
 
 Function Calling (Tool Calls) läuft transparent durch, wie bei einem ganz normalen
@@ -120,6 +152,8 @@ erhalten `403 FreeTierError`). Der Server:
   Mehrfach-Accounts für mehr Gratis-Kontingent.
 - **Veränderliche Pipeline:** OpenCode kann die Transportprüfung jederzeit ändern oder
   abschalten — dann gibt dieser Server den Upstream-Fehler transparent zurück.
+- **LAN-Modus:** Andere Geräte kommen nur mit Key rein. Trotzdem gilt: Wer den Key hat,
+  arbeitet über deinen Zugang.
 - **Key geheim halten:** `api-key.txt` enthält deinen Key. Wer ihn hat, kann über
   deinen Zugang arbeiten; teilen gilt gegenüber den OpenCode-Bedingungen als
   Bereitstellung für Dritte.

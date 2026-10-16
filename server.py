@@ -7,10 +7,15 @@ normal API:
     base_url = http://127.0.0.1:8787/v1
     api_key  = sk-oc-free-...
 
-Endpoints:
-    GET  /health                -> simple liveness check (no auth)
+Endpoints (see README for the full list):
+    GET  /                      -> web dashboard
+    GET  /health                -> liveness check (no auth)
     GET  /v1/models             -> discovered free models
     POST /v1/chat/completions   -> chat completions (stream + non-stream)
+    POST /api/chat|generate     -> Ollama-compatible chat / generate
+
+Access: requests from the server machine itself need no key; requests
+from other machines (LAN) must send the API key.
 
 Standard library only, personal use only. The upstream envelope follows
 OpenCode's own client requests; availability can change at any time.
@@ -20,28 +25,30 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import ipaddress
 import itertools
 import json
 import os
 import secrets
 import socket
 import string
-import string
 import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Iterator
 
-DASHBOARD_FILE = Path(__file__).resolve().parent / "dashboard.html"
-REQUEST_LOG: deque = deque(maxlen=200)
+APP_VERSION = "1.1.0"
 
 BASE_DIR = Path(__file__).resolve().parent
+DASHBOARD_FILE = BASE_DIR / "dashboard.html"
+ASSETS_DIR = BASE_DIR / "assets"
+ASSET_TYPES = {".woff2": "font/woff2", ".svg": "image/svg+xml", ".css": "text/css; charset=utf-8"}
 MODEL_CACHE = BASE_DIR / "models.json"
 KEY_FILE = BASE_DIR / "api-key.txt"
 
@@ -72,9 +79,12 @@ RESPONSES_MODELS = frozenset(
 )
 
 UPSTREAM_TIMEOUT = 900.0
+MAX_BODY_BYTES = 32 * 1024 * 1024
 
 _MODEL_LOCK = threading.Lock()
 _MODEL_SNAPSHOT: tuple[str, ...] | None = None
+_MODEL_SOURCE = "fallback"  # live | cache | fallback
+_MODEL_UPDATED = 0.0
 
 _BASE62 = string.digits + string.ascii_letters
 _ID_LOCK = threading.Lock()
@@ -189,22 +199,38 @@ def _save_model_cache(models: list[str]) -> None:
 
 
 def available_models(timeout: float = 15.0, refresh: bool = False) -> list[str]:
-    global _MODEL_SNAPSHOT
+    """Free tool-capable models; live lookup once, then the in-memory snapshot.
+
+    The network lookup runs outside the lock so a slow refresh never blocks
+    requests that only need the current list.
+    """
+    global _MODEL_SNAPSHOT, _MODEL_SOURCE, _MODEL_UPDATED
     with _MODEL_LOCK:
-        if _MODEL_SNAPSHOT is None or refresh:
-            try:
-                models = _free_live_models(
-                    _json_get(ZEN_MODELS_URL, timeout),
-                    _json_get(MODELS_DEV_URL, timeout),
-                )
-            except (OSError, ValueError, urllib.error.URLError):
-                models = []
-            if models:
-                _save_model_cache(models)
-            else:
-                models = _load_model_cache() or list(FALLBACK_MODELS)
-            _MODEL_SNAPSHOT = tuple(models)
+        if _MODEL_SNAPSHOT is not None and not refresh:
+            return list(_MODEL_SNAPSHOT)
+    try:
+        models = _free_live_models(
+            _json_get(ZEN_MODELS_URL, timeout),
+            _json_get(MODELS_DEV_URL, timeout),
+        )
+    except (OSError, ValueError):
+        models = []
+    with _MODEL_LOCK:
+        if models:
+            _save_model_cache(models)
+            _MODEL_SNAPSHOT, _MODEL_SOURCE = tuple(models), "live"
+        elif _MODEL_SNAPSHOT is None:
+            cached = _load_model_cache()
+            _MODEL_SNAPSHOT = tuple(cached or FALLBACK_MODELS)
+            _MODEL_SOURCE = "cache" if cached else "fallback"
+        # a failed refresh keeps the last good snapshot
+        _MODEL_UPDATED = time.time()
         return list(_MODEL_SNAPSHOT)
+
+
+def model_source() -> dict[str, Any]:
+    with _MODEL_LOCK:
+        return {"source": _MODEL_SOURCE, "updated": _MODEL_UPDATED}
 
 
 def uses_responses_api(model: str) -> bool:
@@ -223,15 +249,25 @@ _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 def _sse_lines_to_payloads(response: Any) -> Iterator[dict[str, Any]]:
-    for raw_line in response:
-        line = raw_line.decode("utf-8", "replace").strip()
-        if not line.startswith("data:"):
-            continue
-        payload = line[5:].strip()
-        if payload == "[DONE]":
-            return
-        if payload:
-            yield json.loads(payload)
+    # Closing in finally also releases the upstream connection when the
+    # client disconnects and the generator is closed early.
+    try:
+        for raw_line in response:
+            line = raw_line.decode("utf-8", "replace").strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                return
+            if payload:
+                try:
+                    yield json.loads(payload)
+                except json.JSONDecodeError as exc:
+                    raise ProxyError(f"upstream sent invalid JSON: {payload[:200]}") from exc
+    except TimeoutError as exc:
+        raise ProxyError("upstream timed out while streaming.", 504) from exc
+    finally:
+        response.close()
 
 
 def upstream_stream(
@@ -259,12 +295,16 @@ def upstream_stream(
         response = _OPENER.open(request, timeout=timeout)
     except urllib.error.HTTPError as exc:
         raise ProxyError(
-            f" upstream rejected request (HTTP {exc.code}): "
+            f"upstream rejected request (HTTP {exc.code}): "
             f"{exc.read().decode('utf-8', 'replace')[:500]}",
             502 if exc.code >= 500 else exc.code,
         ) from exc
     except urllib.error.URLError as exc:
         raise ProxyError(f"upstream connection failed: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise ProxyError("upstream timed out.", 504) from exc
+    except OSError as exc:
+        raise ProxyError(f"upstream connection failed: {exc}") from exc
 
     return _sse_lines_to_payloads(response)
 
@@ -425,8 +465,6 @@ def ensure_responses_required_tools(
                 },
             )
     return tools
-
-
 
 
 _PASSTHROUGH_KEYS = (
@@ -1018,13 +1056,14 @@ def ollama_generate_response(completion: dict[str, Any]) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- dashboard API
 
+
 _TEST_PROMPT = "Reply with exactly the token: OK-DASH"
 
 
 def open_upstream_events(req: dict[str, Any], model: str) -> Iterator[dict[str, Any]]:
-    """Shared upstream opener for the chat handler and the dashboard test."""
+    """Shared upstream opener for the chat handlers and the dashboard test."""
     if uses_responses_api(model):
-        events = upstream_stream(RESPONSES_URL, build_responses_request(req))
+        events = upstream_stream(RESPONSES_URL, build_responses_request({**req, "model": model}))
         return responses_events_to_deltas(events)
     return upstream_stream(DIRECT_URL, build_chat_request({**req, "model": model}))
 
@@ -1036,45 +1075,118 @@ def run_model_test(model: str, prompt: str | None = None) -> dict[str, Any]:
         "messages": [{"role": "user", "content": prompt or _TEST_PROMPT}],
         "stream": False,
     }
-    deltas = open_upstream_events(req, model)
-    completion = merge_deltas(deltas, model)
+    completion = merge_deltas(open_upstream_events(req, model), model)
     latency_ms = (time.perf_counter() - start) * 1000
     message = completion["choices"][0]["message"]
-    usage = completion.get("usage") or {}
+    usage = _usage(completion.get("usage"))
     return {
         "ok": True,
         "text": str(message.get("content") or ""),
         "latency_ms": round(latency_ms),
-        "tokens": int(usage.get("total_tokens", 0) or 0),
+        "tokens": usage["total_tokens"],
+        "usage": usage,
     }
 
 
-def regenerate_api_key() -> str:
-    key = "sk-oc-free-" + secrets.token_hex(20)
-    KEY_FILE.write_text(key + "\n", encoding="utf-8")
-    try:
-        KEY_FILE.chmod(0o600)
-    except OSError:
-        pass
-    return key
+class Metrics:
+    """In-memory request statistics shown on the dashboard."""
 
+    TIMELINE_MINUTES = 30
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.started = time.time()
+        self.requests = 0
+        self.errors = 0
+        self.tokens_in = 0
+        self.tokens_out = 0
+        self.latency_total = 0.0
+        self.models: dict[str, dict[str, float]] = {}
+        self.minutes: dict[int, list[int]] = {}
+        self.log: deque = deque(maxlen=200)
+
+    def record(self, entry: dict[str, Any], *, inference: bool) -> None:
+        failed = entry["status"] >= 400 or bool(entry.get("error"))
+        with self.lock:
+            self.log.append(entry)
+            if not inference:
+                return
+            self.requests += 1
+            self.errors += failed
+            self.tokens_in += entry.get("tokens_in", 0)
+            self.tokens_out += entry.get("tokens_out", 0)
+            self.latency_total += entry["ms"]
+            stats = self.models.setdefault(
+                entry["model"],
+                {"requests": 0, "errors": 0, "tokens": 0, "latency_total": 0.0, "last_ms": 0},
+            )
+            stats["requests"] += 1
+            stats["errors"] += failed
+            stats["tokens"] += entry.get("tokens_in", 0) + entry.get("tokens_out", 0)
+            stats["latency_total"] += entry["ms"]
+            stats["last_ms"] = entry["ms"]
+            minute = int(time.time() // 60)
+            bucket = self.minutes.setdefault(minute, [0, 0])
+            bucket[0] += 1
+            bucket[1] += failed
+            for old in [m for m in self.minutes if m <= minute - self.TIMELINE_MINUTES]:
+                del self.minutes[old]
+
+    def snapshot(self) -> dict[str, Any]:
+        now_minute = int(time.time() // 60)
+        with self.lock:
+            timeline = [
+                self.minutes.get(m, [0, 0])
+                for m in range(now_minute - self.TIMELINE_MINUTES + 1, now_minute + 1)
+            ]
+            return {
+                "uptime_s": round(time.time() - self.started),
+                "requests": self.requests,
+                "errors": self.errors,
+                "tokens_in": self.tokens_in,
+                "tokens_out": self.tokens_out,
+                "avg_ms": round(self.latency_total / self.requests) if self.requests else None,
+                "models": {
+                    name: {
+                        "requests": int(s["requests"]),
+                        "errors": int(s["errors"]),
+                        "tokens": int(s["tokens"]),
+                        "avg_ms": round(s["latency_total"] / s["requests"]),
+                        "last_ms": round(s["last_ms"]),
+                    }
+                    for name, s in self.models.items()
+                },
+                "timeline": [{"requests": r, "errors": e} for r, e in timeline],
+                "log": list(self.log),
+            }
+
+
+METRICS = Metrics()
 
 SERVER: Any = None
 BOUND_OPEN: bool = False
+BOUND_PORT: int = 8787
 
 
-def dashboard_state() -> dict[str, Any]:
-    try:
-        models = available_models()
-    except Exception:  # noqa: BLE001
-        models = list(FALLBACK_MODELS)
+def dashboard_state(*, local: bool) -> dict[str, Any]:
+    models = available_models()
     return {
         "ok": True,
-        "api_key": api_key_cache() or "(benoetigt Neustart)",
-        "models": models,
-        "log": list(REQUEST_LOG),
-        "lan_ip": None if not BOUND_OPEN else _lan_ip(),
+        "version": APP_VERSION,
+        "local": local,
+        "api_key": (api_key_cache() or "(Neustart nötig)") if local else None,
+        "models": [
+            {"id": m, "api": "responses" if uses_responses_api(m) else "chat"}
+            for m in models
+        ],
+        "model_list": model_source(),
+        "lan_ip": _lan_ip() if BOUND_OPEN else None,
+        "port": BOUND_PORT,
+        "default_model": DEFAULT_MODEL if DEFAULT_MODEL in models else (models[0] if models else DEFAULT_MODEL),
     }
+
+
+# ---------------------------------------------------------------- API key
 
 
 def api_key_cache() -> str | None:
@@ -1085,15 +1197,7 @@ def api_key_cache() -> str | None:
         return None
 
 
-# ---------------------------------------------------------------- API key
-
-
-def ensure_api_key() -> str:
-    if KEY_FILE.exists():
-        key = KEY_FILE.read_text(encoding="utf-8").strip()
-        if key:
-            return key
-    key = "sk-oc-free-" + secrets.token_hex(20)
+def _write_key(key: str) -> str:
     KEY_FILE.write_text(key + "\n", encoding="utf-8")
     try:
         KEY_FILE.chmod(0o600)
@@ -1102,17 +1206,24 @@ def ensure_api_key() -> str:
     return key
 
 
-# ---------------------------------------------------------------- HTTP server
+def regenerate_api_key() -> str:
+    return _write_key("sk-oc-free-" + secrets.token_hex(20))
 
-# --- console cosmetics -----------------------------------------------
+
+def ensure_api_key() -> str:
+    return api_key_cache() or regenerate_api_key()
 
 
-def _enable_windows_vt() -> bool:
+# ---------------------------------------------------------------- console
+
+
+def _enable_windows_vt(port: int) -> bool:
     """Enable ANSI colors in the Windows console; False if not supported."""
     if os.name != "nt":
-        return True
+        return sys.stderr.isatty()
     try:
         kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        kernel32.SetConsoleTitleW(f"oc-free-api - Port {port}")
         for handle_id in (-11, -12):  # stdout, stderr
             handle = kernel32.GetStdHandle(handle_id)
             mode = ctypes.c_uint32()
@@ -1120,13 +1231,12 @@ def _enable_windows_vt() -> bool:
                 return False
             if not kernel32.SetConsoleMode(handle, mode.value | 0x0004):
                 return False
-        kernel32.SetConsoleTitleW("oc-free-api - Port 8787")
         return True
     except Exception:  # noqa: BLE001
         return False
 
 
-VT: bool = None  # set in _console_init()
+VT: bool = False  # set in _console_init()
 
 _RESET = "\x1b[0m"
 _COLORS = {
@@ -1146,19 +1256,25 @@ def _paint(text: str, color: str) -> str:
     return _COLORS[color] + text + _RESET
 
 
-def _emit(line: str) -> None:
+def _emit(line: str, stream: Any = None) -> None:
+    stream = stream or sys.stdout
     try:
-        print(line, flush=True)
+        stream.write(line + "\n")
     except UnicodeEncodeError:
-        print(line.encode("ascii", "replace").decode("ascii", "replace"), flush=True)
+        stream.write(line.encode("ascii", "replace").decode("ascii") + "\n")
+    stream.flush()
 
 
-def _console_init() -> None:
+def _console_init(port: int) -> None:
     global VT
-    VT = _enable_windows_vt()
+    for stream in (sys.stdout, sys.stderr):
+        if not stream.isatty() and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")  # pipes / log files
+    VT = _enable_windows_vt(port)
 
 
 def _lan_ip() -> str:
+    # UDP "connect" sends nothing; it only selects the outgoing interface.
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.connect(("9.9.9.9", 53))
@@ -1170,22 +1286,21 @@ def _lan_ip() -> str:
 
 
 def _print_banner(port: int, host: str, key: str, models: list[str]) -> None:
-    base_url = f"http://localhost:{port}/v1"
     shown_models = ", ".join(models[:5]) + (" …" if len(models) > 5 else "")
     _emit("")
     _emit(
         _paint("oc-free-api", "bright")
         + "   "
-        + _paint("OpenCode free models · OpenAI-kompatibel", "dim")
+        + _paint(f"v{APP_VERSION} · OpenCode free models · OpenAI-kompatibel", "dim")
     )
     _emit("  " + _paint("Dashboard ", "cyan") + _paint(f"http://localhost:{port}/", "green"))
     if host in ("0.0.0.0", "::"):
         _emit(
             "  " + _paint("Netzwerk  ", "cyan")
             + _paint(f"http://{_lan_ip()}:{port}/", "green")
-            + _paint("  (LAN, ggf. in der Firewall erlaubt)", "dim")
+            + _paint("  (LAN-Zugriff nur mit API-Key)", "dim")
         )
-    _emit("  " + _paint("Base URL  ", "cyan") + _paint(base_url, "bright"))
+    _emit("  " + _paint("Base URL  ", "cyan") + _paint(f"http://localhost:{port}/v1", "bright"))
     _emit("  " + _paint("API-Key   ", "cyan") + _paint(key, "yellow"))
     _emit(
         "  " + _paint("Modelle   ", "cyan")
@@ -1198,8 +1313,9 @@ def _print_banner(port: int, host: str, key: str, models: list[str]) -> None:
 _STATUS_WORD = {
     200: "OK", 201: "OK", 204: "OK",
     400: "BAD REQUEST", 401: "UNAUTHORIZED", 403: "FORBIDDEN", 404: "NOT FOUND",
-    429: "RATE LIMITED", 451: "BLOCKED",
+    411: "LENGTH REQUIRED", 413: "TOO LARGE", 429: "RATE LIMITED", 451: "BLOCKED",
     500: "SERVER ERROR", 502: "UPSTREAM ERROR", 503: "SERVICE UNAVAILABLE",
+    504: "UPSTREAM TIMEOUT",
 }
 
 
@@ -1213,51 +1329,144 @@ def _status_color(code: int) -> str:
     return "red"
 
 
+# ---------------------------------------------------------------- HTTP server
+
+# Access levels:
+#   open   - no key (static page, model lists, liveness/probe endpoints)
+#   client - key required, except for local requests from this machine
+#   local  - only from this machine (a key alone is not enough)
+ROUTES: dict[tuple[str, str], tuple[str, str]] = {
+    ("GET", "/"): ("open", "_get_dashboard_page"),
+    ("GET", "/dashboard"): ("open", "_get_dashboard_page"),
+    ("GET", "/health"): ("open", "_get_health"),
+    ("GET", "/favicon.ico"): ("open", "_get_favicon"),
+    ("GET", "/v1/models"): ("open", "_get_models"),
+    ("GET", "/api/v1/models"): ("open", "_get_models"),
+    ("GET", "/api/tags"): ("open", "_get_ollama_tags"),
+    ("GET", "/api/ps"): ("open", "_get_ollama_ps"),
+    ("GET", "/api/version"): ("open", "_get_version"),
+    ("GET", "/version"): ("open", "_get_version"),
+    ("GET", "/v1/props"): ("open", "_get_props"),
+    ("GET", "/props"): ("open", "_get_props"),
+    ("POST", "/api/show"): ("open", "_post_ollama_show"),
+    ("POST", "/v1/chat/completions"): ("client", "_post_chat_completions"),
+    ("POST", "/chat/completions"): ("client", "_post_chat_completions"),
+    ("POST", "/api/chat"): ("client", "_post_ollama_chat"),
+    ("POST", "/api/generate"): ("client", "_post_ollama_generate"),
+    ("GET", "/api/dashboard"): ("client", "_get_dashboard_state"),
+    ("GET", "/api/dashboard/stats"): ("client", "_get_dashboard_stats"),
+    ("POST", "/api/dashboard/test"): ("client", "_post_dashboard_test"),
+    ("POST", "/api/dashboard/refresh"): ("client", "_post_refresh_models"),
+    ("POST", "/api/dashboard/key"): ("local", "_post_new_key"),
+    ("POST", "/api/dashboard/stop"): ("local", "_post_stop_server"),
+}
+
+INFERENCE_PATHS = frozenset(
+    {"/v1/chat/completions", "/chat/completions", "/api/chat", "/api/generate", "/api/dashboard/test"}
+)
+OLLAMA_PATHS = frozenset({"/api/chat", "/api/generate", "/api/show"})
+# Successful GETs on these paths are not logged (dashboard polling, health checks).
+QUIET_PATHS = frozenset(
+    {"/", "/dashboard", "/favicon.ico", "/health", "/api/dashboard", "/api/dashboard/stats",
+     "/assets/fonts/geist.woff2", "/assets/fonts/geist-mono.woff2"}
+)
+CLIENT_GONE = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
+
+
 class OpenAICompatibleHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "oc-free-api/1.0"
+    server_version = f"oc-free-api/{APP_VERSION}"
 
     api_key: str = ""
 
-    # ---- console logging
+    # ---- request lifecycle
 
-    def _console_line(self, code: int | str) -> None:
-        requestline = getattr(self, "requestline", "") or ""
-        parts = requestline.split(" ")
-        method = parts[0] if parts else "?"
-        path = parts[1] if len(parts) > 1 else "/"
+    def do_GET(self) -> None:  # noqa: N802
+        self._dispatch("GET")
+
+    def do_POST(self) -> None:  # noqa: N802
+        self._dispatch("POST")
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        # No CORS headers: cross-origin browser requests stay blocked.
+        self._dispatch("OPTIONS")
+
+    def _dispatch(self, method: str) -> None:
+        self._t0 = time.time()
+        self._status = 0
+        self._meta: dict[str, Any] = {}
+        self._body_read = False
+        self._path = urllib.parse.urlsplit(self.path).path
         try:
-            code_num = int(code)
-        except (TypeError, ValueError):
-            code_num = 0
-        word = _STATUS_WORD.get(code_num, "")
-        elapsed = self._started_at() or ""
-        line = (
-            _paint(time.strftime("%H:%M:%S"), "dim")
-            + "  "
-            + _paint(f"{method:<6}", "bright")
-            + f" {path:<38} "
-            + _paint(str(code_num or code), _status_color(code_num) if code_num else "yellow")
-        )
-        del word
-        if word:
-            line += " " + _paint(word, "dim")
-        if elapsed:
-            line += " " + _paint(elapsed, "dim")
-        REQUEST_LOG.append({"t": time.strftime("%H:%M:%S"), "msg": f"{method} {path} -> {code_num or code}"})
-        sys.stderr.write(_paint("[oc-free-api] ", "dim") + line + "\n")
+            if method == "OPTIONS":
+                self.send_response(204)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            route = ROUTES.get((method, self._path))
+            if route is None and method == "GET" and self._path.startswith("/assets/"):
+                route = ("open", "_get_asset")
+            if route is None:
+                if any(path == self._path for _, path in ROUTES):
+                    raise ProxyError(f"method {method} not allowed for {self._path}", 405)
+                raise ProxyError(f"unknown path: {self._path}", 404)
+            access, handler_name = route
+            self._check_access(access)
+            getattr(self, handler_name)()
+        except ProxyError as exc:
+            self._fail(exc.status_code, str(exc))
+        except CLIENT_GONE:
+            self.close_connection = True
+        except Exception as exc:  # noqa: BLE001
+            self._fail(500, f"internal error: {type(exc).__name__}: {exc}")
+        finally:
+            self._finish()
 
-    def _started_at(self) -> str:
-        start = getattr(self, "_t0", None)
-        if not start:
-            return ""
-        return f"{(time.time() - start) * 1000:.0f}ms"
+    def _fail(self, code: int, message: str) -> None:
+        self._meta.setdefault("error", message)
+        if self._status:
+            # Headers are already out (stream); nothing sensible to send.
+            self.close_connection = True
+            return
+        self._drain_body()
+        try:
+            if self._path in OLLAMA_PATHS:
+                self._send_json(code, {"error": message})
+            else:
+                self._send_json(
+                    code, {"error": {"message": message, "type": "oc_free_api_error", "code": code}}
+                )
+        except CLIENT_GONE:
+            self.close_connection = True
+
+    def _drain_body(self) -> None:
+        """Read an unread request body before an early error response.
+
+        Closing a socket with unread input makes Windows send a reset, and
+        the client may then lose the error response.
+        """
+        if self._body_read:
+            return
+        self._body_read = True
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return
+        if 0 < length <= 1024 * 1024:
+            try:
+                self.rfile.read(length)
+            except OSError:
+                pass
+
+    # ---- logging
 
     def log_request(self, code: Any = "-", size: Any = "-") -> None:
+        # Called by send_response; the actual log line is written in _finish
+        # once the request (including any stream) is complete.
         try:
-            self._console_line(code)
-        except Exception:  # noqa: BLE001
-            pass
+            self._status = int(code)
+        except (TypeError, ValueError):
+            self._status = 0
 
     def log_error(self, format: str, *args: Any) -> None:  # noqa: A002
         return
@@ -1265,192 +1474,182 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         return
 
-    # ---- helpers
+    def _finish(self) -> None:
+        method = self.command or "?"
+        status = self._status or 0
+        if method == "OPTIONS" or (
+            method == "GET" and status < 400 and self._path in QUIET_PATHS
+        ):
+            return
+        usage = self._meta.get("usage") or {}
+        entry: dict[str, Any] = {
+            "t": time.strftime("%H:%M:%S"),
+            "ts": time.time(),
+            "method": method,
+            "path": self._path,
+            "status": status,
+            "ms": round((time.time() - self._t0) * 1000),
+            "client": "lokal" if self._is_loopback() else self.client_address[0],
+        }
+        model = self._meta.get("model")
+        if model:
+            entry["model"] = model
+            entry["tokens_in"] = int(usage.get("prompt_tokens", 0) or 0)
+            entry["tokens_out"] = int(usage.get("completion_tokens", 0) or 0)
+        if self._meta.get("error"):
+            entry["error"] = str(self._meta["error"])[:300]
+        try:
+            METRICS.record(entry, inference=bool(model) and self._path in INFERENCE_PATHS)
+            self._console_line(entry)
+        except Exception:  # noqa: BLE001
+            pass
 
-    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
-        # All request logging is done by log_request with colors.
-        return
+    def _console_line(self, entry: dict[str, Any]) -> None:
+        code = entry["status"]
+        word = _STATUS_WORD.get(code, "")
+        line = (
+            _paint(entry["t"], "dim")
+            + "  "
+            + _paint(f"{entry['method']:<6}", "bright")
+            + f" {entry['path']:<26} "
+            + _paint(str(code or "---"), _status_color(code) if code else "red")
+        )
+        if word:
+            line += " " + _paint(f"{word:<14}", "dim")
+        line += " " + _paint(f"{entry['ms']:>6}ms", "dim")
+        if entry.get("model"):
+            line += "  " + _paint(entry["model"], "cyan")
+            tokens = entry["tokens_in"] + entry["tokens_out"]
+            if tokens:
+                line += _paint(f" {tokens} tok", "dim")
+        if entry["client"] != "lokal":
+            line += _paint(f"  [{entry['client']}]", "magenta")
+        if entry.get("error"):
+            line += "  " + _paint(entry["error"][:120], "red")
+        _emit(_paint("[oc-free-api] ", "dim") + line, sys.stderr)
+
+    # ---- access control
+
+    def _is_loopback(self) -> bool:
+        try:
+            ip = ipaddress.ip_address(str(self.client_address[0]).split("%", 1)[0])
+        except ValueError:
+            return False
+        mapped = getattr(ip, "ipv4_mapped", None)
+        return bool((mapped or ip).is_loopback)
+
+    def _host_ok(self) -> bool:
+        """Reject foreign Host names (DNS rebinding)."""
+        host = (self.headers.get("Host") or "").strip().lower()
+        if not host:
+            return True
+        hostname = urllib.parse.urlsplit("//" + host).hostname or ""
+        if hostname == "localhost" or hostname.endswith(".localhost"):
+            return True
+        try:
+            ipaddress.ip_address(hostname)
+            return True
+        except ValueError:
+            pass
+        machine = socket.gethostname().lower().split(".", 1)[0]
+        return hostname.split(".", 1)[0] == machine
+
+    def _origin_ok(self) -> bool:
+        """Reject requests a foreign web page makes from the user's browser (CSRF)."""
+        if self.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
+            return False
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        netloc = urllib.parse.urlsplit(origin).netloc.lower()
+        return bool(netloc) and netloc == (self.headers.get("Host") or "").strip().lower()
 
     def _trusted(self) -> bool:
-        """Local connections (Dashboard full view, stop/key controls)."""
-        return self.client_address[0] in {"127.0.0.1", "::1"}
+        """Request comes from this machine and not from a foreign web page."""
+        return self._is_loopback() and self._host_ok() and self._origin_ok()
+
+    def _presented_key(self) -> str | None:
+        auth = self.headers.get("Authorization", "")
+        if auth.lower().startswith("bearer "):
+            return auth[7:].strip()
+        return self.headers.get("x-api-key", "").strip() or None
 
     def _authorized(self) -> bool:
-        auth = self.headers.get("Authorization", "")
-        if auth.startswith("Bearer ") and auth[7:].strip() == self.api_key:
-            return True
-        if self.headers.get("x-api-key", "").strip() == self.api_key:
-            return True
-        return False
+        key = self._presented_key()
+        return key is not None and secrets.compare_digest(
+            key.encode("utf-8"), self.api_key.encode("utf-8")
+        )
+
+    def _check_access(self, access: str) -> None:
+        if access == "open":
+            return
+        if access == "local":
+            if not self._trusted():
+                raise ProxyError("only allowed from the server machine itself.", 403)
+            return
+        # Local clients often send placeholder keys ("ollama", "lm-studio"),
+        # so a trusted local request is accepted whatever key it sends.
+        if self._trusted() or self._authorized():
+            return
+        raise ProxyError(
+            "Missing or invalid API key. Pass it as 'Authorization: Bearer <key>' "
+            "(key file: api-key.txt). Requests from other machines always need it.",
+            401,
+        )
+
+    # ---- responses
 
     def _send_json(self, code: int, payload: dict[str, Any]) -> None:
-        data = json.dumps(payload).encode("utf-8")
+        self._send_bytes(code, json.dumps(payload).encode("utf-8"), "application/json")
+
+    def _send_bytes(self, code: int, data: bytes, content_type: str) -> None:
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(data)
 
-    def _send_error_json(self, code: int, message: str) -> None:
-        self._send_json(
-            code,
-            {"error": {"message": message, "type": "oc_free_api_error", "code": code}},
-        )
+    def _start_chunked(self, content_type: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
 
-    def _unauthorized(self) -> None:
-        self._send_error_json(
-            401,
-            "Missing or invalid API key. Pass it as "
-            "'Authorization: Bearer <key>' (key file: api-key.txt).",
-        )
+    def _chunk(self, data: bytes) -> None:
+        self.wfile.write(f"{len(data):x}\r\n".encode() + data + b"\r\n")
+        self.wfile.flush()
 
-    # ---- GET
-
-    def do_GET(self) -> None:  # noqa: N802
-        self._t0 = time.time()
-        path = self.path.split("?", 1)[0]
-        if path == "/" or path == "/dashboard":
-            try:
-                payload = DASHBOARD_FILE.read_bytes()
-            except OSError:
-                self._send_error_json(500, "dashboard.html not found next to server.py")
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(payload)))
-            self.send_header("Connection", "close")
-            self.end_headers()
-            self.wfile.write(payload)
-            return
-        if path == "/health":
-            self._send_json(200, {"ok": True})
-            return
-        if path in {"/v1/models", "/api/v1/models"}:
-            try:
-                models = available_models()
-            except Exception as exc:  # noqa: BLE001
-                self._send_error_json(502, f"model discovery failed: {exc}")
-                return
-            self._send_json(
-                200,
-                {
-                    "object": "list",
-                    "data": [
-                        {
-                            "id": model,
-                            "object": "model",
-                            "created": 0,
-                            "owned_by": "opencode",
-                        }
-                        for model in models
-                    ],
-                },
-            )
-            return
-        if path == "/api/dashboard/log":
-            self._send_json(200, {"log": list(REQUEST_LOG)})
-            return
-        if path == "/api/dashboard":
-            state = dashboard_state()
-            if not self._trusted():
-                state["api_key"] = "(nur lokal am Server sichtbar)"
-                state["remote"] = True
-            self._send_json(200, state)
-            return
-        if path == "/api/tags":
-            try:
-                self._send_json(200, {"models": _ollama_model_entries()})
-            except Exception as exc:  # noqa: BLE001
-                self._send_error_json(502, f"model discovery failed: {exc}")
-            return
-        if path == "/api/ps":
-            self._send_json(
-                200,
-                {
-                    "models": [
-                        {
-                            "name": entry["name"],
-                            "model": entry["model"],
-                            "size": 0,
-                            "size_vram": 0,
-                            "digest": entry["digest"],
-                            "details": entry["details"],
-                            "expires_at": "0001-01-01T00:00:00Z",
-                        }
-                        for entry in _ollama_model_entries()
-                    ]
-                },
-            )
-            return
-        if path in {"/api/version", "/version"}:
-            self._send_json(200, {"version": "oc-free-api/1.0.0"})
-            return
-        if path in {"/v1/props", "/props"}:
-            try:
-                models = available_models()
-            except Exception:  # noqa: BLE001
-                models = list(FALLBACK_MODELS)
-            model = models[0] if models else DEFAULT_MODEL
-            self._send_json(
-                200,
-                {
-                    "model": model,
-                    "family": "opencode-free",
-                    "prompt": "",
-                    "n_keep": 0,
-                    "n_discard": 0,
-                    "n_predict": -1,
-                    "n_ctx": 131072,
-                    "temperature": 1.0,
-                    "top_k": 40,
-                    "top_p": 0.95,
-                    "total_slots": 1,
-                    "modalities": {"vision": False, "audio_in": False, "audio_out": False},
-                    "default_generation_settings": {
-                        "id": "slot-0",
-                        "port": 0,
-                        "model": model,
-                        "n_predict": -1,
-                        "n_keep": 0,
-                        "truncation": 50,
-                        "n_ctx": 131072,
-                    },
-                },
-            )
-            return
-        self._send_error_json(404, f"unknown path: {path}")
-
-    # ---- POST
-
-    def do_POST(self) -> None:  # noqa: N802
-        self._t0 = time.time()
-        path = self.path.split("?", 1)[0]
-        if path in {"/v1/chat/completions", "/chat/completions"}:
-            self._post_chat_completions()
-        elif path == "/api/chat":
-            self._post_ollama_chat()
-        elif path == "/api/generate":
-            self._post_ollama_generate()
-        elif path == "/api/show":
-            self._post_ollama_show()
-        elif path == "/api/dashboard/refresh":
-            self._post_refresh_models()
-        elif path == "/api/dashboard/test":
-            self._post_dashboard_test()
-        elif path == "/api/dashboard/key":
-            self._post_new_key()
-        elif path == "/api/dashboard/stop":
-            self._post_stop_server()
-        else:
-            self._send_error_json(404, f"unknown path: {path}")
+    def _end_chunked(self) -> None:
+        try:
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except OSError:
+            pass
+        self.close_connection = True
 
     def _read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length") or 0)
+        if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+            raise ProxyError("chunked request bodies are not supported; send Content-Length.", 411)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError as exc:
+            raise ProxyError("invalid Content-Length header.", 400) from exc
+        if length < 0:
+            raise ProxyError("invalid Content-Length header.", 400)
+        if length > MAX_BODY_BYTES:
+            raise ProxyError(
+                f"request body too large ({length} bytes, max {MAX_BODY_BYTES}).", 413
+            )
         raw = self.rfile.read(length) if length else b""
+        self._body_read = True
         try:
             req = json.loads(raw.decode("utf-8")) if raw else {}
-        except json.JSONDecodeError as exc:
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ProxyError(f"invalid JSON body: {exc}", 400) from exc
         if not isinstance(req, dict):
             raise ProxyError("request body must be a JSON object", 400)
@@ -1458,10 +1657,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     def _resolve_model(self, name: Any) -> str:
         model = normalize_model_name(name)
-        try:
-            models = available_models()
-        except Exception:  # noqa: BLE001
-            models = list(FALLBACK_MODELS)
+        models = available_models()
         if models and model not in models:
             raise ProxyError(
                 f"model '{model}' is not an available free model. "
@@ -1469,174 +1665,302 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
                 f"({', '.join(models)})",
                 404,
             )
+        self._meta["model"] = model
         return model
 
     def _open_upstream(self, req: dict[str, Any], model: str) -> Iterator[dict[str, Any]]:
-        return open_upstream_events(req, model)
+        return self._tap(open_upstream_events(req, model))
+
+    def _tap(self, deltas: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        """Pass events through, remembering token usage for the metrics."""
+        try:
+            for event in deltas:
+                if isinstance(event.get("usage"), dict):
+                    self._meta["usage"] = _usage(event["usage"])
+                yield event
+        finally:
+            close = getattr(deltas, "close", None)
+            if close:
+                close()
+
+    # ---- GET endpoints
+
+    def _get_dashboard_page(self) -> None:
+        try:
+            payload = DASHBOARD_FILE.read_bytes()
+        except OSError as exc:
+            raise ProxyError("dashboard.html not found next to server.py", 500) from exc
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _get_asset(self) -> None:
+        root = ASSETS_DIR.resolve()
+        target = (root / urllib.parse.unquote(self._path[len("/assets/"):])).resolve()
+        content_type = ASSET_TYPES.get(target.suffix.lower())
+        if root not in target.parents or not content_type or not target.is_file():
+            raise ProxyError(f"unknown path: {self._path}", 404)
+        data = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _get_favicon(self) -> None:
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _get_health(self) -> None:
+        self._send_json(200, {"ok": True, "version": APP_VERSION})
+
+    def _get_models(self) -> None:
+        self._send_json(
+            200,
+            {
+                "object": "list",
+                "data": [
+                    {"id": model, "object": "model", "created": 0, "owned_by": "opencode"}
+                    for model in available_models()
+                ],
+            },
+        )
+
+    def _get_ollama_tags(self) -> None:
+        self._send_json(200, {"models": _ollama_model_entries()})
+
+    def _get_ollama_ps(self) -> None:
+        self._send_json(
+            200,
+            {
+                "models": [
+                    {
+                        "name": entry["name"],
+                        "model": entry["model"],
+                        "size": 0,
+                        "size_vram": 0,
+                        "digest": entry["digest"],
+                        "details": entry["details"],
+                        "expires_at": "0001-01-01T00:00:00Z",
+                    }
+                    for entry in _ollama_model_entries()
+                ]
+            },
+        )
+
+    def _get_version(self) -> None:
+        self._send_json(200, {"version": f"oc-free-api/{APP_VERSION}"})
+
+    def _get_props(self) -> None:
+        models = available_models()
+        model = models[0] if models else DEFAULT_MODEL
+        self._send_json(
+            200,
+            {
+                "model": model,
+                "family": "opencode-free",
+                "prompt": "",
+                "n_keep": 0,
+                "n_discard": 0,
+                "n_predict": -1,
+                "n_ctx": 131072,
+                "temperature": 1.0,
+                "top_k": 40,
+                "top_p": 0.95,
+                "total_slots": 1,
+                "modalities": {"vision": False, "audio_in": False, "audio_out": False},
+                "default_generation_settings": {
+                    "id": "slot-0",
+                    "port": 0,
+                    "model": model,
+                    "n_predict": -1,
+                    "n_keep": 0,
+                    "truncation": 50,
+                    "n_ctx": 131072,
+                },
+            },
+        )
 
     # ---- dashboard API
 
+    def _get_dashboard_state(self) -> None:
+        self._send_json(200, dashboard_state(local=self._trusted()))
+
+    def _get_dashboard_stats(self) -> None:
+        self._send_json(200, {"ok": True, **METRICS.snapshot()})
+
     def _post_refresh_models(self) -> None:
-        try:
-            available_models(refresh=True)
-            self._send_json(200, {"ok": True})
-        except Exception as exc:  # noqa: BLE001
-            self._send_error_json(502, f"model discovery failed: {exc}")
+        models = available_models(refresh=True)
+        self._send_json(200, {"ok": True, "models": models, **model_source()})
 
     def _post_dashboard_test(self) -> None:
-        try:
-            req = self._read_json()
-            model = self._resolve_model(req.get("model"))
-            self._send_json(200, run_model_test(model, req.get("prompt")))
-        except ProxyError as exc:
-            self._send_error_json(exc.status_code, str(exc))
+        req = self._read_json()
+        model = self._resolve_model(req.get("model"))
+        result = run_model_test(model, req.get("prompt"))
+        self._meta["usage"] = result["usage"]
+        self._send_json(200, result)
 
     def _post_new_key(self) -> None:
-        if not self._trusted():
-            self._send_error_json(403, "Key-Reset only from the server machine locally.")
-            return
         new_key = regenerate_api_key()
         OpenAICompatibleHandler.api_key = new_key
         self._send_json(200, {"ok": True, "api_key": new_key})
 
     def _post_stop_server(self) -> None:
-        if not self._trusted():
-            self._send_error_json(403, "only from the server machine locally.")
-            return
         self._send_json(200, {"ok": True, "stopping": True})
         if SERVER is not None:
             threading.Thread(target=SERVER.shutdown, daemon=True).start()
 
+    # ---- OpenAI API
+
     def _post_chat_completions(self) -> None:
-        if not self._authorized():
-            self._unauthorized()
-            return
+        req = self._read_json()
+        model = self._resolve_model(req.get("model"))
+        deltas = self._open_upstream(req, model)
+        if bool(req.get("stream")):
+            self._openai_stream(deltas, model)
+        else:
+            self._send_json(200, merge_deltas(deltas, model))
+
+    def _openai_stream(self, deltas: Iterator[dict[str, Any]], model: str) -> None:
+        completion_id = "chatcmpl-" + secrets.token_hex(12)
+        created = int(time.time())
+        self._start_chunked("text/event-stream; charset=utf-8")
+
+        def sse(payload: dict[str, Any]) -> bytes:
+            return b"data: " + json.dumps(payload, separators=(",", ":")).encode() + b"\n\n"
+
         try:
-            req = self._read_json()
-            model = self._resolve_model(req.get("model"))
-            deltas = self._open_upstream(req, model)
-            if bool(req.get("stream")):
-                self._handle_streaming(deltas, model)
-            else:
-                self._send_json(200, merge_deltas(deltas, model))
-        except ProxyError as exc:
-            self._send_error_json(exc.status_code, str(exc))
+            seen = False
+            for event in deltas:
+                seen = True
+                chunk: dict[str, Any] = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": str(event.get("model") or model),
+                    "choices": [
+                        {**choice, "index": int(choice.get("index", 0) or 0)}
+                        for choice in (event.get("choices") or [])
+                    ],
+                }
+                if event.get("usage"):
+                    chunk["usage"] = event["usage"]
+                self._chunk(sse(chunk))
+            if not seen:
+                raise ProxyError("upstream returned no events.")
+        except CLIENT_GONE:
+            self._meta["error"] = "client disconnected"
+            self.close_connection = True
+            return
+        except Exception as exc:  # noqa: BLE001
+            # Headers are already sent: report the error in-band like OpenAI does.
+            code = exc.status_code if isinstance(exc, ProxyError) else 502
+            self._meta["error"] = str(exc)
+            try:
+                self._chunk(
+                    sse({"error": {"message": str(exc), "type": "oc_free_api_error", "code": code}})
+                )
+            except OSError:
+                pass
+        try:
+            self._chunk(b"data: [DONE]\n\n")
+        except OSError:
+            pass
+        self._end_chunked()
 
     # ---- Ollama API
 
     def _post_ollama_chat(self) -> None:
-        try:
-            req = self._read_json()
-            model = self._resolve_model(req.get("model"))
-            openai_req = ollama_options(req)
-            openai_req["messages"] = ollama_to_openai_messages(
-                req.get("messages") or []
-            )
-            deltas = self._open_upstream(openai_req, model)
-            include_thinking = bool(req.get("think"))
-            if bool(req.get("stream")):
-                self._write_header_stream("application/x-ndjson")
-                self._ollama_chat_stream(deltas, model, include_thinking)
-            else:
-                completion = merge_deltas(deltas, model)
-                self._send_json(200, ollama_chat_response(completion, include_thinking))
-        except ProxyError as exc:
-            self._send_json(
-                exc.status_code,
-                {"error": {"message": str(exc), "type": "oc_free_api_error"}},
-            )
+        req = self._read_json()
+        model = self._resolve_model(req.get("model"))
+        openai_req = ollama_options(req)
+        openai_req["messages"] = ollama_to_openai_messages(req.get("messages") or [])
+        deltas = self._open_upstream(openai_req, model)
+        include_thinking = bool(req.get("think"))
+        # Ollama streams unless "stream": false is sent explicitly.
+        if req.get("stream", True) is not False:
+            self._ollama_stream(deltas, model, include_thinking, chat=True)
+        else:
+            completion = merge_deltas(deltas, model)
+            self._send_json(200, ollama_chat_response(completion, include_thinking))
 
     def _post_ollama_generate(self) -> None:
-        try:
-            req = self._read_json()
-            model = self._resolve_model(req.get("model"))
-            if req.get("raw"):
-                prompt = str(req.get("prompt") or "")
-                messages = [{"role": "user", "content": prompt}]
-            else:
-                messages = [
-                    m
-                    for m in (
-                        (
-                            {"role": "system", "content": str(req.get("system") or "")}
-                            if req.get("system")
-                            else None
-                        ),
-                        {"role": "user", "content": str(req.get("prompt") or "")},
-                    )
-                    if m
-                ]
-            openai_req = ollama_options(req)
-            openai_req["messages"] = messages
-            deltas = self._open_upstream(openai_req, model)
-            if bool(req.get("stream")):
-                self._write_header_stream("application/x-ndjson")
-                self._ollama_generate_stream(deltas, model, bool(req.get("think")))
-            else:
-                completion = merge_deltas(deltas, model)
-                self._send_json(200, ollama_generate_response(completion))
-        except ProxyError as exc:
-            self._send_json(
-                exc.status_code,
-                {"error": {"message": str(exc), "type": "oc_free_api_error"}},
-            )
+        req = self._read_json()
+        model = self._resolve_model(req.get("model"))
+        messages: list[dict[str, Any]] = []
+        if req.get("system") and not req.get("raw"):
+            messages.append({"role": "system", "content": str(req["system"])})
+        messages.append({"role": "user", "content": str(req.get("prompt") or "")})
+        openai_req = ollama_options(req)
+        openai_req["messages"] = messages
+        deltas = self._open_upstream(openai_req, model)
+        if req.get("stream", True) is not False:
+            self._ollama_stream(deltas, model, bool(req.get("think")), chat=False)
+        else:
+            completion = merge_deltas(deltas, model)
+            self._send_json(200, ollama_generate_response(completion))
 
     def _post_ollama_show(self) -> None:
-        try:
-            req = self._read_json()
-        except ProxyError as exc:
-            self._send_json(
-                exc.status_code,
-                {"error": {"message": str(exc), "type": "oc_free_api_error"}},
-            )
-            return
+        req = self._read_json()
         name = normalize_model_name(req.get("name") or req.get("model"))
-        response: dict[str, Any] = {
-            "name": name,
-            "model": name,
-            "modified_at": _ollama_now(),
-            "license": "personal-use (see repository)",
-            "modelfile": f"FROM {name}",
-            "parameters": "",
-            "template": "{{ .Prompt }}",
-            "details": _ollama_details(),
-            "capabilities": ["completion", "streaming", "tools"],
-            "model_info": {
-                "general.architecture": "opencode-free",
-                "general.name": name,
-                "general.parameter_count": 0,
-                "general.quantization_level": "",
+        self._send_json(
+            200,
+            {
+                "name": name,
+                "model": name,
+                "modified_at": _ollama_now(),
+                "license": "personal-use (see repository)",
+                "modelfile": f"FROM {name}",
+                "parameters": "",
+                "template": "{{ .Prompt }}",
+                "details": _ollama_details(),
+                "capabilities": ["completion", "streaming", "tools"],
+                "model_info": {
+                    "general.architecture": "opencode-free",
+                    "general.name": name,
+                    "general.parameter_count": 0,
+                    "general.quantization_level": "",
+                },
             },
-        }
-        self._send_json(200, response)
+        )
 
-    def _write_header_stream(self, content_type: str) -> None:
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Transfer-Encoding", "chunked")
-        self.end_headers()
-
-    def _write_ndjson(self, payload: dict[str, Any]) -> bool:
-        try:
-            data = (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
-            self.wfile.write(f"{len(data):x}\r\n".encode() + data + b"\r\n")
-            self.wfile.flush()
-            return True
-        except OSError:
-            return False
-
-    def _ollama_chat_stream(
-        self, deltas: Iterator[dict[str, Any]], model: str, include_thinking: bool
+    def _ollama_stream(
+        self,
+        deltas: Iterator[dict[str, Any]],
+        model: str,
+        include_thinking: bool,
+        *,
+        chat: bool,
     ) -> None:
         created = _ollama_now()
         calls: dict[int, dict[str, Any]] = {}
         finish = "stop"
         usage: dict[str, Any] | None = None
+        self._start_chunked("application/x-ndjson")
+
+        def line(payload: dict[str, Any]) -> None:
+            self._chunk((json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8"))
+
+        def piece(field: str, text: str) -> dict[str, Any]:
+            base: dict[str, Any] = {"model": model, "created_at": created, "done": False}
+            if chat:
+                base["message"] = {"role": "assistant", field: text}
+            else:
+                base["response" if field == "content" else field] = text
+            return base
+
         try:
-            saw = False
+            seen = False
             for event in deltas:
-                saw = True
+                seen = True
                 if isinstance(event.get("usage"), dict):
                     usage = event["usage"]
                 for choice in event.get("choices") or []:
@@ -1644,28 +1968,9 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
                         finish = choice["finish_reason"]
                     delta = choice.get("delta") or {}
                     if delta.get("content"):
-                        if not self._write_ndjson(
-                            {
-                                "model": model,
-                                "created_at": created,
-                                "message": {"role": "assistant", "content": str(delta["content"])},
-                                "done": False,
-                            }
-                        ):
-                            return
+                        line(piece("content", str(delta["content"])))
                     if include_thinking and delta.get("reasoning_content"):
-                        if not self._write_ndjson(
-                            {
-                                "model": model,
-                                "created_at": created,
-                                "message": {
-                                    "role": "assistant",
-                                    "thinking": str(delta["reasoning_content"]),
-                                },
-                                "done": False,
-                            }
-                        ):
-                            return
+                        line(piece("thinking", str(delta["reasoning_content"])))
                     for raw_call in delta.get("tool_calls") or []:
                         index = int(raw_call.get("index", 0) or 0)
                         item = calls.setdefault(index, {"name": "", "arguments": ""})
@@ -1673,168 +1978,51 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
                         if function.get("name"):
                             item["name"] = str(function["name"])
                         item["arguments"] += str(function.get("arguments") or "")
-            if not saw:
+            if not seen:
                 raise ProxyError("upstream returned no events.")
             if finish == "content_filter":
                 raise ProxyError("upstream blocked the response by content filter.", 400)
-            ollama_calls = [
-                {
-                    "function": {
-                        "name": item["name"],
-                        "arguments": _json_obj(item["arguments"]),
-                    }
-                }
+            final: dict[str, Any] = {"model": model, "created_at": created, "done": True}
+            tool_calls = [
+                {"function": {"name": item["name"], "arguments": _json_obj(item["arguments"])}}
                 for _, item in sorted(calls.items())
                 if item["name"]
             ]
-            message: dict[str, Any] = {"role": "assistant", "content": ""}
-            if ollama_calls:
-                message["tool_calls"] = ollama_calls
-            chunk: dict[str, Any] = {
-                "model": model,
-                "created_at": created,
-                "message": message,
-                "done": True,
-                "done_reason": "tool_calls" if ollama_calls else finish,
-            }
-            prompt_count, eval_count = _ollama_usage(usage)
-            chunk["prompt_eval_count"] = prompt_count
-            chunk["eval_count"] = eval_count
-            self._write_ndjson(chunk)
-        except (ProxyError, BrokenPipeError, ConnectionResetError):
-            pass
-        finally:
+            if chat:
+                final["message"] = {"role": "assistant", "content": ""}
+                if tool_calls:
+                    final["message"]["tool_calls"] = tool_calls
+            else:
+                final["response"] = ""
+            final["done_reason"] = "tool_calls" if tool_calls else finish
+            final["prompt_eval_count"], final["eval_count"] = _ollama_usage(usage)
+            line(final)
+        except CLIENT_GONE:
+            self._meta["error"] = "client disconnected"
+            self.close_connection = True
+            return
+        except Exception as exc:  # noqa: BLE001
+            self._meta["error"] = str(exc)
             try:
-                self.wfile.write(b"0\r\n\r\n")
-                self.wfile.flush()
+                line({"error": str(exc)})
             except OSError:
                 pass
-            self.close_connection = True
-
-    def _ollama_generate_stream(
-        self, deltas: Iterator[dict[str, Any]], model: str, include_thinking: bool
-    ) -> None:
-        created = _ollama_now()
-        finish = "stop"
-        usage: dict[str, Any] | None = None
-        try:
-            saw = False
-            for event in deltas:
-                saw = True
-                if isinstance(event.get("usage"), dict):
-                    usage = event["usage"]
-                for choice in event.get("choices") or []:
-                    if choice.get("finish_reason"):
-                        finish = choice["finish_reason"]
-                    delta = choice.get("delta") or {}
-                    if delta.get("content"):
-                        if not self._write_ndjson(
-                            {
-                                "model": model,
-                                "created_at": created,
-                                "response": str(delta["content"]),
-                                "done": False,
-                            }
-                        ):
-                            return
-                    if include_thinking and delta.get("reasoning_content"):
-                        if not self._write_ndjson(
-                            {
-                                "model": model,
-                                "created_at": created,
-                                "thinking": str(delta["reasoning_content"]),
-                                "done": False,
-                            }
-                        ):
-                            return
-            if not saw:
-                raise ProxyError("upstream returned no events.")
-            if finish == "content_filter":
-                raise ProxyError("upstream blocked the response by content filter.", 400)
-            prompt_count, eval_count = _ollama_usage(usage)
-            self._write_ndjson(
-                {
-                    "model": model,
-                    "created_at": created,
-                    "response": "",
-                    "done": True,
-                    "done_reason": finish,
-                    "prompt_eval_count": prompt_count,
-                    "eval_count": eval_count,
-                }
-            )
-        except (ProxyError, BrokenPipeError, ConnectionResetError):
-            pass
-        finally:
-            try:
-                self.wfile.write(b"0\r\n\r\n")
-                self.wfile.flush()
-            except OSError:
-                pass
-            self.close_connection = True
-
-    # ---- streaming response
-
-    def _handle_streaming(self, deltas: Iterator[dict[str, Any]], model: str) -> None:
-        completion_id = "chatcmpl-" + secrets.token_hex(12)
-        created = int(time.time())
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Transfer-Encoding", "chunked")
-        self.end_headers()
-
-        def write_chunk(payload: bytes) -> bool:
-            self.wfile.write(f"{len(payload):x}\r\n".encode() + payload + b"\r\n")
-            self.wfile.flush()
-            return True
-
-        def sse(event: dict[str, Any]) -> bytes:
-            chunk: dict[str, Any] = {
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": str(event.get("model") or model),
-                "choices": [
-                    {
-                        **choice,
-                        "index": int(choice.get("index", 0) or 0),
-                    }
-                    for choice in (event.get("choices") or [])
-                ],
-            }
-            if event.get("usage"):
-                chunk["usage"] = event["usage"]
-            return b"data: " + json.dumps(chunk, separators=(",", ":")).encode() + b"\n\n"
-
-        try:
-            first_done = False
-            for event in deltas:
-                if not first_done:
-                    first_done = True
-                write_chunk(sse(event))
-            if not first_done:
-                raise ProxyError("upstream returned no events.")
-            write_chunk(b"data: [DONE]\n\n")
-        except (ProxyError, BrokenPipeError, ConnectionResetError):
-            pass
-        finally:
-            try:
-                self.wfile.write(b"0\r\n\r\n")
-                self.wfile.flush()
-            except OSError:
-                pass
-            self.close_connection = True
+        self._end_chunked()
 
 
 # ---------------------------------------------------------------- main
 
 
 def main() -> None:
+    global SERVER, BOUND_OPEN, BOUND_PORT
     parser = argparse.ArgumentParser(
         description="OpenAI-compatible local API for OpenCode Zen free models."
     )
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="bind address (default 0.0.0.0 = local + LAN; 127.0.0.1 = local only)",
+    )
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--key", help="use a specific API key instead of the generated one")
     parser.add_argument(
@@ -1845,27 +2033,28 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.key:
-        KEY_FILE.write_text(args.key + "\n", encoding="utf-8")
+        _write_key(args.key.strip())
 
     api_key = ensure_api_key()
     models = available_models(refresh=args.refresh_models)
-
     OpenAICompatibleHandler.api_key = api_key
 
-    server = ThreadingHTTPServer((args.host, args.port), OpenAICompatibleHandler)
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), OpenAICompatibleHandler)
+    except OSError as exc:
+        sys.exit(f"Cannot listen on {args.host}:{args.port}: {exc}")
     server.daemon_threads = True
-    global SERVER, BOUND_OPEN
     SERVER = server
     BOUND_OPEN = args.host in ("0.0.0.0", "::")
-    base = f"http://localhost:{args.port}/v1"
+    BOUND_PORT = args.port
 
-    _console_init()
+    _console_init(args.port)
     _print_banner(args.port, args.host, api_key, models)
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nShutting down.")
+        _emit("\nShutting down.")
     finally:
         server.server_close()
 
