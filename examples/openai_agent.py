@@ -1,13 +1,3 @@
-"""Minimal OpenAI-compatible coding agent using the oc-free-api proxy.
-
-Demonstrates the full agent loop: model calls tools -> agent executes them
-locally -> results go back -> model finishes. Uses ONLY the standard
-OpenAI-compatible interface (no Ollama bridge).
-
-Run:
-    python examples/openai_agent.py "Schreibe eine Funktion mul(a,b) nach agent_demo.py und teste sie"
-"""
-
 from __future__ import annotations
 
 import json

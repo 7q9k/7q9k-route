@@ -10,7 +10,6 @@
   @font-face{ font-family:'Geist'; src:url('/assets/fonts/geist.woff2') format('woff2'); font-weight:100 900; font-display:swap; }
   @font-face{ font-family:'Geist Mono'; src:url('/assets/fonts/geist-mono.woff2') format('woff2'); font-weight:100 900; font-display:swap; }
 
-  /* ---- Tokens: monochrom, eine Signalfarbe nur für Zustand ---- */
   :root{
     --col:760px; --gap-section:64px; --r-field:12px; --r-pill:999px; --btn-h:40px;
     --sans:'Geist',ui-sans-serif,system-ui,'Segoe UI',sans-serif;
@@ -37,7 +36,6 @@
   .mono{ font-family:var(--mono); }
   .num{ font-variant-numeric:tabular-nums; }
 
-  /* ---- Kopfzeile ---- */
   .top{ height:72px; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:0 clamp(16px,4vw,40px); }
   .brand{ font-weight:650; font-size:17px; letter-spacing:-.03em; white-space:nowrap; }
   .brand span{ color:var(--signal); }
@@ -48,7 +46,6 @@
   .text-btn:hover{ color:var(--text); }
   .text-btn:disabled{ opacity:.5; cursor:progress; }
 
-  /* ---- Spalte ---- */
   .col{ width:min(var(--col),100% - 32px); margin:0 auto; padding:clamp(24px,7vh,72px) 0 80px; }
   .section{ margin-top:var(--gap-section); }
   .section-head{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; padding-bottom:10px; border-bottom:1px solid var(--line); }
@@ -57,7 +54,6 @@
   .title{ margin:0 0 6px; font-size:clamp(24px,4vw,30px); font-weight:650; line-height:1.2; letter-spacing:-.03em; }
   .lead{ margin:0; font-size:15.5px; color:var(--text-2); }
 
-  /* ---- Kennzahlen: Zahlen in einer Zeile, keine Kästen ---- */
   .stats{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); margin-top:40px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
   .stat{ padding:18px 0 16px; min-width:0; }
   .stat + .stat{ padding-left:20px; border-left:1px solid var(--line); }
@@ -66,7 +62,6 @@
   .stat .l{ font-size:13px; color:var(--muted); }
   .stat .h{ font-size:12.5px; color:var(--muted); margin-top:2px; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
-  /* ---- Verlauf ---- */
   .chart{ position:relative; height:96px; margin-top:22px; }
   .chart svg{ display:block; width:100%; height:100%; overflow:visible; }
   .chart .axis{ fill:var(--muted); font:10.5px var(--mono); }
@@ -78,7 +73,6 @@
   .tip{ position:absolute; pointer-events:none; padding:6px 10px; border-radius:8px; background:var(--primary); color:var(--primary-ink); font-size:12.5px; white-space:nowrap; transform:translate(-50%,calc(-100% - 8px)); opacity:0; transition:opacity .12s; z-index:3; }
   .chart-cap{ display:flex; justify-content:space-between; margin-top:6px; font-size:12.5px; color:var(--muted); }
 
-  /* ---- Zeilen (Verbindung) ---- */
   .rows{ margin:0; padding:0; list-style:none; }
   .rows li{ display:grid; grid-template-columns:150px minmax(0,1fr) auto; gap:16px; align-items:center; padding:12px 0; border-bottom:1px solid var(--line); }
   .rows .k{ font-size:13.5px; color:var(--muted); }
@@ -86,7 +80,6 @@
   .rows .a{ display:flex; gap:16px; }
   .hint{ margin:12px 0 0; font-size:13.5px; color:var(--muted); }
 
-  /* ---- Segment-Umschalter + Code ---- */
   .mode{ display:inline-flex; gap:2px; padding:3px; border:1px solid var(--line); border-radius:var(--r-pill); }
   .mode button{ padding:3px 12px; border:0; border-radius:var(--r-pill); background:transparent; font-size:13px; color:var(--muted); transition:color .2s, background .2s; }
   .mode button:hover{ color:var(--text); }
@@ -94,7 +87,6 @@
   .code-head{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:28px; }
   pre.code{ margin:14px 0 0; padding:0 0 16px; border-bottom:1px solid var(--line); font:12.5px/1.7 var(--mono); color:var(--text-2); overflow-x:auto; }
 
-  /* ---- Felder + Buttons ---- */
   .btn{ display:inline-flex; align-items:center; justify-content:center; gap:8px; height:var(--btn-h); padding:0 18px; border:1px solid var(--line-2); border-radius:var(--r-field); background:transparent; font-size:14px; font-weight:550; white-space:nowrap; transition:transform .15s var(--ease), border-color .2s, background .2s, color .2s; }
   .btn:hover{ border-color:var(--text); }
   .btn:active{ transform:scale(.985); }
@@ -120,7 +112,6 @@
   .bar{ height:2px; margin-top:12px; overflow:hidden; border-radius:2px; background:var(--line); }
   .bar i{ display:block; width:30%; height:100%; background:var(--signal); animation:indet 1.2s var(--ease) infinite; }
 
-  /* ---- Listen (Modelle, Aktivität) ---- */
   .list{ margin:0; padding:0; list-style:none; }
   .list li{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:center; padding:12px 0; border-bottom:1px solid var(--line); }
   .list li:last-child{ border-bottom:0; }
@@ -140,7 +131,6 @@
 
   .foot{ margin-top:var(--gap-section); padding-top:16px; border-top:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; font-size:13px; color:var(--muted); }
 
-  /* ---- Key-Eingabe bei Zugriff aus dem Netzwerk ---- */
   .gate .field{ display:flex; align-items:center; gap:8px; height:56px; margin-top:28px; padding:0 8px 0 16px; border:1px solid var(--line-2); border-radius:var(--r-field); background:var(--field); }
   .gate .field:focus-within{ border-color:var(--text); box-shadow:var(--focus-glow); }
   .gate input{ flex:1; min-width:0; height:100%; border:0; outline:0; background:transparent; font:15px var(--mono); }
@@ -180,7 +170,6 @@
 </header>
 
 <main class="col">
-  <!-- Zugriff aus dem Netzwerk: Key eingeben -->
   <section class="gate" id="gate" hidden>
     <h1 class="title">API-Key eingeben</h1>
     <p class="lead">Du greifst über das Netzwerk zu. Der Key steht in <span class="mono">api-key.txt</span> auf dem Server-Rechner.</p>
@@ -275,7 +264,6 @@ const fmt = n => n == null ? '–' : n >= 1e6 ? (n/1e6).toLocaleString('de-DE',{
 const fmtMs = ms => ms == null ? '–' : ms >= 1000 ? (ms/1000).toLocaleString('de-DE',{maximumFractionDigits:1})+' s' : ms+' ms';
 const fmtDur = s => { const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60); return d ? `${d} T ${h} Std.` : h ? `${h} Std. ${m} Min.` : m ? `${m} Min.` : `${s} Sek.`; };
 
-// ---- Theme (Standard dunkel, Wahl wird gemerkt)
 function applyThemeLabel(){ $('theme').textContent = document.documentElement.dataset.theme === 'dark' ? 'Hell' : 'Dunkel'; }
 $('theme').onclick = () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; try{ localStorage.setItem('ocfree.theme', t) }catch{} applyThemeLabel(); };
 applyThemeLabel();
@@ -283,7 +271,6 @@ applyThemeLabel();
 let toastTimer;
 function toast(msg){ document.querySelector('.toast')?.remove(); const t=document.createElement('div'); t.className='toast'; t.setAttribute('role','status'); t.textContent=msg; document.body.append(t); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.remove(),2200); }
 
-// Gefährliche Aktionen: erster Klick schaltet scharf, zweiter führt aus.
 function armed(btn, label, fn){
   btn.onclick = async () => {
     if (!btn.classList.contains('armed')) {
@@ -296,7 +283,6 @@ function armed(btn, label, fn){
   };
 }
 
-// ---- Key: nur nötig beim Zugriff von einem anderen Gerät
 const store = { get(){ try{ return localStorage.getItem('ocfree.key')||'' }catch{ return '' } }, set(v){ try{ v?localStorage.setItem('ocfree.key',v):localStorage.removeItem('ocfree.key') }catch{} } };
 let remoteKey = store.get();
 const authHeaders = (extra={}) => remoteKey ? {...extra, Authorization:'Bearer '+remoteKey} : extra;
@@ -443,7 +429,6 @@ function renderLog(){
   }).join('') : `<li class="empty-row" style="display:block">${logFilter==='err'?'Keine Fehler.':'Noch keine Anfragen. Schick oben eine Nachricht oder teste ein Modell.'}</li>`;
 }
 
-// ---- Laden
 async function loadState(){
   try{ state = await api('/api/dashboard'); $('gate').hidden=true; $('app').hidden=false; setState(true); renderAccess(); renderModels(); }
   catch(e){ if (e instanceof AuthError) showGate(remoteKey ? 'Der Key wurde nicht angenommen. Bitte prüfen.' : ''); else setState(false); }
@@ -456,7 +441,6 @@ async function refreshStats(){
 function showGate(msg){ state=null; $('app').hidden=true; $('gate').hidden=false; $('state').innerHTML='<b>Key nötig</b>'; const h=$('gateHint'); h.textContent=msg||''; h.classList.toggle('bad', !!msg); $('gateKey').value=remoteKey; $('gateKey').focus(); }
 $('gateForm').onsubmit = async ev => { ev.preventDefault(); remoteKey=$('gateKey').value.trim(); store.set(remoteKey); await loadState(); refreshStats(); };
 
-// ---- Aktionen
 async function copy(text){ try{ await navigator.clipboard.writeText(text.trim()); toast('Kopiert'); }catch{ toast('Kopieren ging nicht. Bitte von Hand markieren.'); } }
 document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copy($(b.dataset.copy).textContent));
 $('btnCopyKey').onclick=()=>copy(keyText()||'');
@@ -471,7 +455,6 @@ $('btnTestAll').onclick=e=>busy(e.currentTarget, async()=>{ for (const li of $('
 armed($('btnKey'), 'Wirklich neu erzeugen?', async()=>{ await api('/api/dashboard/key',{}); await loadState(); toast('Neuer Key ist aktiv. Clients brauchen ihn jetzt.'); });
 armed($('btnStop'), 'Wirklich stoppen?', async()=>{ await api('/api/dashboard/stop',{}); toast('Server wird gestoppt'); setTimeout(()=>setState(false),600); });
 
-// ---- Ausprobieren (streamt über den normalen OpenAI-Endpunkt)
 let pgAbort=null;
 async function sendPrompt(){
   const prompt=$('pgPrompt').value.trim(); if(!prompt || pgAbort) return;

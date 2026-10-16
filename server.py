@@ -1,27 +1,3 @@
-"""OpenCode Zen free models as a local OpenAI-compatible API.
-
-Exposes an OpenAI-style endpoint with its own API key so any client
-(coding agent, IDE plugin, chat tool) can use the free models like a
-normal API:
-
-    base_url = http://127.0.0.1:8787/v1
-    api_key  = sk-oc-free-...
-
-Endpoints (see README for the full list):
-    GET  /                      -> web dashboard
-    GET  /health                -> liveness check (no auth)
-    GET  /v1/models             -> discovered free models
-    POST /v1/chat/completions   -> chat completions (stream + non-stream)
-    POST /v1/responses          -> OpenAI Responses API (stateless, stream + non-stream)
-    POST /api/chat|generate     -> Ollama-compatible chat / generate
-
-Access: requests from the server machine itself need no key; requests
-from other machines (LAN) must send the API key.
-
-Standard library only, personal use only. The upstream envelope follows
-OpenCode's own client requests; availability can change at any time.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -84,7 +60,7 @@ MAX_BODY_BYTES = 32 * 1024 * 1024
 
 _MODEL_LOCK = threading.Lock()
 _MODEL_SNAPSHOT: tuple[str, ...] | None = None
-_MODEL_SOURCE = "fallback"  # live | cache | fallback
+_MODEL_SOURCE = "fallback"
 _MODEL_UPDATED = 0.0
 
 _BASE62 = string.digits + string.ascii_letters
@@ -101,9 +77,6 @@ class ProxyError(Exception):
         self.status_code = status_code
 
 
-# ---------------------------------------------------------------- session ids
-
-
 def _session_id() -> str:
     return _oc_id("ses", descending=True)
 
@@ -113,11 +86,6 @@ def _request_id() -> str:
 
 
 def _oc_id(prefix: str, *, descending: bool) -> str:
-    """Replica of opencode's ID generator (packages/opencode/src/id/id.ts).
-
-    Sessions are descending, requests ascending; the free tier validates
-    this shape and may reject unknown clients with 403.
-    """
     global _LAST_ID_TS, _ID_COUNTER
     with _ID_LOCK:
         now_ts = int(time.time() * 1000)
@@ -135,9 +103,6 @@ def _oc_id(prefix: str, *, descending: bool) -> str:
             + time_bytes.hex()
             + "".join(secrets.choice(_BASE62) for _ in range(14))
         )
-
-
-# ---------------------------------------------------------------- model discovery
 
 
 def _json_get(url: str, timeout: float) -> Any:
@@ -200,11 +165,6 @@ def _save_model_cache(models: list[str]) -> None:
 
 
 def available_models(timeout: float = 15.0, refresh: bool = False) -> list[str]:
-    """Free tool-capable models; live lookup once, then the in-memory snapshot.
-
-    The network lookup runs outside the lock so a slow refresh never blocks
-    requests that only need the current list.
-    """
     global _MODEL_SNAPSHOT, _MODEL_SOURCE, _MODEL_UPDATED
     with _MODEL_LOCK:
         if _MODEL_SNAPSHOT is not None and not refresh:
@@ -224,7 +184,6 @@ def available_models(timeout: float = 15.0, refresh: bool = False) -> list[str]:
             cached = _load_model_cache()
             _MODEL_SNAPSHOT = tuple(cached or FALLBACK_MODELS)
             _MODEL_SOURCE = "cache" if cached else "fallback"
-        # a failed refresh keeps the last good snapshot
         _MODEL_UPDATED = time.time()
         return list(_MODEL_SNAPSHOT)
 
@@ -238,9 +197,6 @@ def uses_responses_api(model: str) -> bool:
     return model in RESPONSES_MODELS
 
 
-# ---------------------------------------------------------------- SSE plumbing
-
-
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: Any) -> None:
         return None
@@ -250,8 +206,6 @@ _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 def _sse_lines_to_payloads(response: Any) -> Iterator[dict[str, Any]]:
-    # Closing in finally also releases the upstream connection when the
-    # client disconnects and the generator is closed early.
     try:
         for raw_line in response:
             line = raw_line.decode("utf-8", "replace").strip()
@@ -310,14 +264,6 @@ def upstream_stream(
     return _sse_lines_to_payloads(response)
 
 
-# ---------------------------------------------------------------- chat payload
-
-
-# Real schemas for opencode's native tools. The free tier validates that
-# request tool schemas are non-empty; emitting tool markers without
-# parameters is rejected. Marker descriptions stay "unavailable" so the
-# model should not call them unless the client actually supplied a
-# matching tool.
 COMPAT_TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "bash": {
         "type": "object",
@@ -422,11 +368,6 @@ def _mesh_tool_names(tools: list[dict[str, Any]]) -> set[str]:
 
 
 def ensure_required_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The free tier requires bash and read tools in EVERY request.
-
-    Injects native-tool markers (with real, non-empty schemas) when the
-    client did not supply them. Injected tools precede client tools.
-    """
     tools = [tool for tool in tools if isinstance(tool, dict)]
     names = _mesh_tool_names(tools)
     result = list(tools)
@@ -504,9 +445,6 @@ def build_chat_request(req: dict[str, Any]) -> dict[str, Any]:
         if req.get("tool_choice") is not None:
             body["tool_choice"] = req["tool_choice"]
     return body
-
-
-# ---------------------------------------------------------------- responses payload
 
 
 def _message_text(content: Any) -> str:
@@ -641,7 +579,6 @@ def build_responses_request(req: dict[str, Any]) -> dict[str, Any]:
 
 
 def responses_events_to_deltas(events: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-    """Convert /responses SSE into OpenAI chat-completion style delta chunks."""
     seen = False
     saw_tool_call = False
     call_indexes: dict[int, int] = {}
@@ -746,9 +683,6 @@ def responses_events_to_deltas(events: Iterator[dict[str, Any]]) -> Iterator[dic
         raise ProxyError("upstream returned no events.")
 
 
-# ---------------------------------------------------------------- aggregation
-
-
 def _usage(value: Any = None) -> dict[str, Any]:
     raw = value if isinstance(value, dict) else {}
     prompt = int(raw.get("prompt_tokens", raw.get("input", 0)) or 0)
@@ -765,7 +699,6 @@ def _usage(value: Any = None) -> dict[str, Any]:
 
 
 def merge_deltas(events: Iterator[dict[str, Any]], model: str) -> dict[str, Any]:
-    """Aggregate chat-style delta chunks into one non-streaming response."""
     content: list[str] = []
     reasoning: list[str] = []
     reasoning_details: list[Any] = []
@@ -857,17 +790,7 @@ def merge_deltas(events: Iterator[dict[str, Any]], model: str) -> dict[str, Any]
     }
 
 
-# ---------------------------------------------------------------- responses API (client side)
-#
-# Clients that speak the OpenAI Responses API (POST /v1/responses) are
-# translated to a chat request, sent through the normal upstream path and
-# the chat deltas are turned back into Responses objects / SSE events.
-# Stateless: previous_response_id is not supported, clients send the full
-# input every time (store=false), which is what agent clients do anyway.
-
-
 def _responses_parts_to_chat(content: Any) -> Any:
-    """Responses message content -> chat message content (string or parts)."""
     if not isinstance(content, list):
         return _message_text(content)
     parts: list[dict[str, Any]] = []
@@ -902,7 +825,6 @@ def _tool_output_text(output: Any) -> str:
 
 
 def responses_to_chat_request(req: dict[str, Any]) -> dict[str, Any]:
-    """Translate a Responses API request body into a chat-completions request."""
     if req.get("previous_response_id"):
         raise ProxyError(
             "previous_response_id is not supported (stateless proxy); "
@@ -947,7 +869,6 @@ def responses_to_chat_request(req: dict[str, Any]) -> dict[str, Any]:
                     "content": _tool_output_text(item.get("output")),
                 }
             )
-        # reasoning, item_reference, built-in tool items: nothing to forward
 
     chat: dict[str, Any] = {"model": req.get("model"), "messages": messages}
     tools = []
@@ -1005,11 +926,6 @@ def _responses_usage(usage: dict[str, Any] | None) -> dict[str, Any]:
 
 
 class ResponsesBuilder:
-    """Turns chat-completion deltas into Responses API output items and events.
-
-    feed() returns the SSE events for one delta; the finished response
-    object is available from response() at any time.
-    """
 
     def __init__(self, model: str, req: dict[str, Any]) -> None:
         self.id = "resp_" + secrets.token_hex(12)
@@ -1021,10 +937,9 @@ class ResponsesBuilder:
         self.status = "in_progress"
         self.error: dict[str, Any] | None = None
         self.seq = 0
-        self._open: dict[str, Any] | None = None  # item currently being streamed
+        self._open: dict[str, Any] | None = None
         self._tool_items: dict[int, dict[str, Any]] = {}
 
-    # ---- event helpers
 
     def _event(self, kind: str, **fields: Any) -> dict[str, Any]:
         event = {"type": kind, "sequence_number": self.seq, **fields}
@@ -1069,7 +984,6 @@ class ResponsesBuilder:
             self._event("response.in_progress", response=self.response()),
         ]
 
-    # ---- item lifecycle
 
     def _close_open(self) -> list[dict[str, Any]]:
         item, self._open = self._open, None
@@ -1155,7 +1069,7 @@ class ResponsesBuilder:
                     self._tool_items[index] = item
                     events += self._open_item(item)
                 elif self._open is not item:
-                    continue  # late fragment for an already closed call; ignore
+                    continue
                 if function.get("name") and not item["name"]:
                     item["name"] = str(function["name"])
                 chunk = str(function.get("arguments") or "")
@@ -1193,9 +1107,6 @@ def build_responses_object(deltas: Iterator[dict[str, Any]], model: str, req: di
         raise ProxyError("upstream returned no events.")
     builder.finish()
     return builder.response()
-
-
-# ---------------------------------------------------------------- ollama bridge
 
 
 _CALL_ID_SEQ = itertools.count(1)
@@ -1262,7 +1173,6 @@ def normalize_model_name(name: Any) -> str:
 
 
 def ollama_to_openai_messages(messages: list[Any]) -> list[dict[str, Any]]:
-    """Convert Ollama chat messages (incl. tool_calls / tool results)."""
     result: list[dict[str, Any]] = []
     ids_by_name: dict[str, list[str]] = {}
     fifo_ids: list[str] = []
@@ -1313,7 +1223,6 @@ def ollama_to_openai_messages(messages: list[Any]) -> list[dict[str, Any]]:
 
 
 def ollama_options(req: dict[str, Any]) -> dict[str, Any]:
-    """Build an OpenAI chat request out of an Ollama /api/chat|generate body."""
     options = req.get("options") if isinstance(req.get("options"), dict) else {}
     openai_req: dict[str, Any] = {
         "model": req.get("model"),
@@ -1393,14 +1302,10 @@ def ollama_generate_response(completion: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------- dashboard API
-
-
 _TEST_PROMPT = "Reply with exactly the token: OK-DASH"
 
 
 def open_upstream_events(req: dict[str, Any], model: str) -> Iterator[dict[str, Any]]:
-    """Shared upstream opener for the chat handlers and the dashboard test."""
     if uses_responses_api(model):
         events = upstream_stream(RESPONSES_URL, build_responses_request({**req, "model": model}))
         return responses_events_to_deltas(events)
@@ -1428,7 +1333,6 @@ def run_model_test(model: str, prompt: str | None = None) -> dict[str, Any]:
 
 
 class Metrics:
-    """In-memory request statistics shown on the dashboard."""
 
     TIMELINE_MINUTES = 30
 
@@ -1525,9 +1429,6 @@ def dashboard_state(*, local: bool) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------- API key
-
-
 def api_key_cache() -> str | None:
     try:
         value = KEY_FILE.read_text(encoding="utf-8").strip()
@@ -1553,17 +1454,13 @@ def ensure_api_key() -> str:
     return api_key_cache() or regenerate_api_key()
 
 
-# ---------------------------------------------------------------- console
-
-
 def _enable_windows_vt(port: int) -> bool:
-    """Enable ANSI colors in the Windows console; False if not supported."""
     if os.name != "nt":
         return sys.stderr.isatty()
     try:
-        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        kernel32 = ctypes.windll.kernel32
         kernel32.SetConsoleTitleW(f"oc-free-api - Port {port}")
-        for handle_id in (-11, -12):  # stdout, stderr
+        for handle_id in (-11, -12):
             handle = kernel32.GetStdHandle(handle_id)
             mode = ctypes.c_uint32()
             if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
@@ -1571,11 +1468,11 @@ def _enable_windows_vt(port: int) -> bool:
             if not kernel32.SetConsoleMode(handle, mode.value | 0x0004):
                 return False
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
-VT: bool = False  # set in _console_init()
+VT: bool = False
 
 _RESET = "\x1b[0m"
 _COLORS = {
@@ -1608,12 +1505,11 @@ def _console_init(port: int) -> None:
     global VT
     for stream in (sys.stdout, sys.stderr):
         if not stream.isatty() and hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")  # pipes / log files
+            stream.reconfigure(encoding="utf-8", errors="replace")
     VT = _enable_windows_vt(port)
 
 
 def _lan_ip() -> str:
-    # UDP "connect" sends nothing; it only selects the outgoing interface.
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.connect(("9.9.9.9", 53))
@@ -1668,12 +1564,6 @@ def _status_color(code: int) -> str:
     return "red"
 
 
-# ---------------------------------------------------------------- HTTP server
-
-# Access levels:
-#   open   - no key (static page, model lists, liveness/probe endpoints)
-#   client - key required, except for local requests from this machine
-#   local  - only from this machine (a key alone is not enough)
 ROUTES: dict[tuple[str, str], tuple[str, str]] = {
     ("GET", "/"): ("open", "_get_dashboard_page"),
     ("GET", "/dashboard"): ("open", "_get_dashboard_page"),
@@ -1696,7 +1586,6 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/api/generate"): ("client", "_post_ollama_generate"),
     ("GET", "/api/dashboard"): ("client", "_get_dashboard_state"),
     ("GET", "/api/dashboard/stats"): ("client", "_get_dashboard_stats"),
-    # polled by dashboard tabs opened before v1.1; kept so they stay quiet
     ("GET", "/api/dashboard/log"): ("client", "_get_dashboard_log"),
     ("POST", "/api/dashboard/test"): ("client", "_post_dashboard_test"),
     ("POST", "/api/dashboard/refresh"): ("client", "_post_refresh_models"),
@@ -1711,7 +1600,6 @@ INFERENCE_PATHS = frozenset(
     }
 )
 OLLAMA_PATHS = frozenset({"/api/chat", "/api/generate", "/api/show"})
-# Successful GETs on these paths are not logged (dashboard polling, health checks).
 QUIET_PATHS = frozenset(
     {"/", "/dashboard", "/favicon.ico", "/health", "/api/dashboard", "/api/dashboard/stats",
      "/api/dashboard/log",
@@ -1726,16 +1614,14 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     api_key: str = ""
 
-    # ---- request lifecycle
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         self._dispatch("GET")
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         self._dispatch("POST")
 
-    def do_OPTIONS(self) -> None:  # noqa: N802
-        # No CORS headers: cross-origin browser requests stay blocked.
+    def do_OPTIONS(self) -> None:
         self._dispatch("OPTIONS")
 
     def _dispatch(self, method: str) -> None:
@@ -1764,7 +1650,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             self._fail(exc.status_code, str(exc))
         except CLIENT_GONE:
             self.close_connection = True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._fail(500, f"internal error: {type(exc).__name__}: {exc}")
         finally:
             self._finish()
@@ -1772,7 +1658,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
     def _fail(self, code: int, message: str) -> None:
         self._meta.setdefault("error", message)
         if self._status:
-            # Headers are already out (stream); nothing sensible to send.
             self.close_connection = True
             return
         self._drain_body()
@@ -1787,11 +1672,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def _drain_body(self) -> None:
-        """Read an unread request body before an early error response.
-
-        Closing a socket with unread input makes Windows send a reset, and
-        the client may then lose the error response.
-        """
         if self._body_read:
             return
         self._body_read = True
@@ -1805,20 +1685,17 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             except OSError:
                 pass
 
-    # ---- logging
 
     def log_request(self, code: Any = "-", size: Any = "-") -> None:
-        # Called by send_response; the actual log line is written in _finish
-        # once the request (including any stream) is complete.
         try:
             self._status = int(code)
         except (TypeError, ValueError):
             self._status = 0
 
-    def log_error(self, format: str, *args: Any) -> None:  # noqa: A002
+    def log_error(self, format: str, *args: Any) -> None:
         return
 
-    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+    def log_message(self, format: str, *args: Any) -> None:
         return
 
     def _finish(self) -> None:
@@ -1848,7 +1725,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         try:
             METRICS.record(entry, inference=bool(model) and self._path in INFERENCE_PATHS)
             self._console_line(entry)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     def _console_line(self, entry: dict[str, Any]) -> None:
@@ -1875,7 +1752,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             line += "  " + _paint(entry["error"][:120], "red")
         _emit(_paint("[oc-free-api] ", "dim") + line, sys.stderr)
 
-    # ---- access control
 
     def _is_loopback(self) -> bool:
         try:
@@ -1886,7 +1762,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         return bool((mapped or ip).is_loopback)
 
     def _host_ok(self) -> bool:
-        """Reject foreign Host names (DNS rebinding)."""
         host = (self.headers.get("Host") or "").strip().lower()
         if not host:
             return True
@@ -1902,7 +1777,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         return hostname.split(".", 1)[0] == machine
 
     def _origin_ok(self) -> bool:
-        """Reject requests a foreign web page makes from the user's browser (CSRF)."""
         if self.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
             return False
         origin = self.headers.get("Origin")
@@ -1912,7 +1786,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         return bool(netloc) and netloc == (self.headers.get("Host") or "").strip().lower()
 
     def _trusted(self) -> bool:
-        """Request comes from this machine and not from a foreign web page."""
         return self._is_loopback() and self._host_ok() and self._origin_ok()
 
     def _presented_key(self) -> str | None:
@@ -1934,8 +1807,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             if not self._trusted():
                 raise ProxyError("only allowed from the server machine itself.", 403)
             return
-        # Local clients often send placeholder keys ("ollama", "lm-studio"),
-        # so a trusted local request is accepted whatever key it sends.
         if self._trusted() or self._authorized():
             return
         raise ProxyError(
@@ -1944,7 +1815,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             401,
         )
 
-    # ---- responses
 
     def _send_json(self, code: int, payload: dict[str, Any]) -> None:
         self._send_bytes(code, json.dumps(payload).encode("utf-8"), "application/json")
@@ -2019,7 +1889,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         return self._tap(open_upstream_events(req, model))
 
     def _tap(self, deltas: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-        """Pass events through, remembering token usage for the metrics."""
         try:
             for event in deltas:
                 if isinstance(event.get("usage"), dict):
@@ -2030,7 +1899,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             if close:
                 close()
 
-    # ---- GET endpoints
 
     def _get_dashboard_page(self) -> None:
         try:
@@ -2136,7 +2004,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             },
         )
 
-    # ---- dashboard API
 
     def _get_dashboard_state(self) -> None:
         self._send_json(200, dashboard_state(local=self._trusted()))
@@ -2168,7 +2035,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         if SERVER is not None:
             threading.Thread(target=SERVER.shutdown, daemon=True).start()
 
-    # ---- OpenAI API
 
     def _post_chat_completions(self) -> None:
         req = self._read_json()
@@ -2210,8 +2076,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             self._meta["error"] = "client disconnected"
             self.close_connection = True
             return
-        except Exception as exc:  # noqa: BLE001
-            # Headers are already sent: report the error in-band like OpenAI does.
+        except Exception as exc:
             code = exc.status_code if isinstance(exc, ProxyError) else 502
             self._meta["error"] = str(exc)
             try:
@@ -2226,7 +2091,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             pass
         self._end_chunked()
 
-    # ---- OpenAI Responses API
 
     def _post_responses(self) -> None:
         req = self._read_json()
@@ -2261,8 +2125,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             self._meta["error"] = "client disconnected"
             self.close_connection = True
             return
-        except Exception as exc:  # noqa: BLE001
-            # Headers are already sent: report the failure as a response.failed event.
+        except Exception as exc:
             self._meta["error"] = str(exc)
             try:
                 send(builder.fail(str(exc)))
@@ -2270,7 +2133,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
                 pass
         self._end_chunked()
 
-    # ---- Ollama API
 
     def _post_ollama_chat(self) -> None:
         req = self._read_json()
@@ -2279,7 +2141,6 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         openai_req["messages"] = ollama_to_openai_messages(req.get("messages") or [])
         deltas = self._open_upstream(openai_req, model)
         include_thinking = bool(req.get("think"))
-        # Ollama streams unless "stream": false is sent explicitly.
         if req.get("stream", True) is not False:
             self._ollama_stream(deltas, model, include_thinking, chat=True)
         else:
@@ -2395,16 +2256,13 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             self._meta["error"] = "client disconnected"
             self.close_connection = True
             return
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._meta["error"] = str(exc)
             try:
                 line({"error": str(exc)})
             except OSError:
                 pass
         self._end_chunked()
-
-
-# ---------------------------------------------------------------- main
 
 
 def main() -> None:

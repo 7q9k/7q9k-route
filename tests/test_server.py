@@ -1,8 +1,3 @@
-"""Tests for oc-free-api. No network: the upstream is replaced by fakes.
-
-Run:  python -m unittest discover -s tests -v
-"""
-
 from __future__ import annotations
 
 import http.client
@@ -18,7 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import server  # noqa: E402
+import server
 
 KEY = "sk-oc-free-test"
 MODELS = ["big-pickle", "muse-spark-1.3-contributor-free"]
@@ -58,9 +53,9 @@ class PureFunctionTests(unittest.TestCase):
     def test_oc_ids_have_opencode_shape_and_order(self):
         a, b = server._request_id(), server._request_id()
         self.assertRegex(a, r"^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$")
-        self.assertLess(a[:16], b[:16])  # ascending
+        self.assertLess(a[:16], b[:16])
         s1, s2 = server._session_id(), server._session_id()
-        self.assertGreater(s1[:16], s2[:16])  # descending
+        self.assertGreater(s1[:16], s2[:16])
 
     def test_required_tools_injected_once(self):
         tools = server.ensure_required_tools([])
@@ -210,7 +205,6 @@ class PureFunctionTests(unittest.TestCase):
 
 
 class ServerTests(unittest.TestCase):
-    """Runs the real HTTP server on a random port with a fake upstream."""
 
     @classmethod
     def setUpClass(cls):
@@ -219,7 +213,7 @@ class ServerTests(unittest.TestCase):
             mock.patch.object(server, "KEY_FILE", Path(cls.tmp.name) / "api-key.txt"),
             mock.patch.object(server, "available_models", lambda *a, **k: list(MODELS)),
             mock.patch.object(server, "_lan_ip", lambda: "192.168.1.20"),
-            mock.patch.object(server, "_emit", lambda *a, **k: None),  # quiet request log
+            mock.patch.object(server, "_emit", lambda *a, **k: None),
         ]
         for p in cls.patches:
             p.start()
@@ -240,8 +234,6 @@ class ServerTests(unittest.TestCase):
         cls.tmp.cleanup()
 
     def settle(self):
-        """Wait until handler threads are done (metrics are recorded after the
-        response bytes reach the client)."""
         deadline = time.time() + 5
         while threading.active_count() > self.baseline_threads and time.time() < deadline:
             time.sleep(0.01)
@@ -267,7 +259,6 @@ class ServerTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    # ---- basics
 
     def test_health_and_models_open(self):
         self.assertEqual(self.request("GET", "/health")[0], 200)
@@ -279,7 +270,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         text = body.decode("utf-8")
         self.assertIn("oc-free-api", text)
-        self.assertNotRegex(text, "[┬╖ΓÇ]")  # no mojibake
+        self.assertNotRegex(text, "[┬╖ΓÇ]")
 
     def test_assets_served_without_path_escape(self):
         status, body = self.request("GET", "/assets/fonts/geist.woff2")
@@ -292,7 +283,6 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/nope")[0], 404)
         self.assertEqual(self.request("GET", "/v1/chat/completions")[0], 405)
 
-    # ---- chat
 
     def test_chat_completion_non_stream(self):
         status, body = self.request(
@@ -354,7 +344,6 @@ class ServerTests(unittest.TestCase):
             status, _ = self.request("POST", "/v1/chat/completions", {"model": "big-pickle"})
         self.assertEqual(status, 413)
 
-    # ---- responses API
 
     def test_responses_non_stream(self):
         status, body = self.request("POST", "/v1/responses", {"model": "big-pickle", "input": "hi"})
@@ -388,7 +377,6 @@ class ServerTests(unittest.TestCase):
         self.as_remote()
         self.assertEqual(self.request("POST", "/v1/responses", {"model": "big-pickle"})[0], 401)
 
-    # ---- ollama
 
     def test_ollama_chat_streams_by_default(self):
         status, body = self.request("POST", "/api/chat", {"model": "big-pickle:latest", "messages": []})
@@ -408,11 +396,9 @@ class ServerTests(unittest.TestCase):
             _, body = self.request("POST", "/api/chat", {"model": "big-pickle"})
         self.assertEqual(json.loads(body.decode().splitlines()[-1]), {"error": "upstream exploded"})
 
-    # ---- access control
 
     def test_local_requests_need_no_key(self):
         self.assertEqual(self.request("POST", "/api/chat", {"model": "big-pickle", "stream": False})[0], 200)
-        # placeholder keys from local clients are fine too
         status, _ = self.request("POST", "/v1/chat/completions", {"model": "big-pickle"},
                                  headers={"Authorization": "Bearer ollama"})
         self.assertEqual(status, 200)
@@ -426,7 +412,6 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.request("POST", "/v1/chat/completions", {"model": "big-pickle"}, ok)[0], 200)
         self.assertEqual(self.request("POST", "/api/chat", {"model": "big-pickle", "stream": False},
                                       {"x-api-key": KEY})[0], 200)
-        # open endpoints stay open
         self.assertEqual(self.request("GET", "/api/tags")[0], 200)
 
     def test_remote_dashboard_hides_key_and_cannot_control(self):
@@ -469,12 +454,11 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(server.KEY_FILE.read_text(encoding="utf-8").strip(), new_key)
         self.assertEqual(server.OpenAICompatibleHandler.api_key, new_key)
 
-    # ---- metrics / log
 
     def test_requests_are_logged_and_counted(self):
         self.request("POST", "/v1/chat/completions", {"model": "big-pickle"})
-        self.request("GET", "/api/dashboard/stats")  # quiet path, not logged
-        self.request("GET", "/api/dashboard/log")  # old dashboards poll this
+        self.request("GET", "/api/dashboard/stats")
+        self.request("GET", "/api/dashboard/log")
         self.settle()
         stats = json.loads(self.request("GET", "/api/dashboard/stats")[1])
         self.assertEqual(stats["requests"], 1)
