@@ -19,8 +19,10 @@ OpenCode's own client requests; availability can change at any time.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import itertools
 import json
+import os
 import secrets
 import string
 import sys
@@ -1098,6 +1100,97 @@ def ensure_api_key() -> str:
 
 # ---------------------------------------------------------------- HTTP server
 
+# --- console cosmetics -----------------------------------------------
+
+
+def _enable_windows_vt() -> bool:
+    """Enable ANSI colors in the Windows console; False if not supported."""
+    if os.name != "nt":
+        return True
+    try:
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        for handle_id in (-11, -12):  # stdout, stderr
+            handle = kernel32.GetStdHandle(handle_id)
+            mode = ctypes.c_uint32()
+            if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                return False
+            if not kernel32.SetConsoleMode(handle, mode.value | 0x0004):
+                return False
+        kernel32.SetConsoleTitleW("oc-free-api - Port 8787")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+VT: bool = None  # set in _console_init()
+
+_RESET = "\x1b[0m"
+_COLORS = {
+    "green": "\x1b[92m",
+    "bright": "\x1b[1m",
+    "dim": "\x1b[90m",
+    "cyan": "\x1b[96m",
+    "yellow": "\x1b[93m",
+    "red": "\x1b[91m",
+    "magenta": "\x1b[95m",
+}
+
+
+def _paint(text: str, color: str) -> str:
+    if not VT:
+        return text
+    return _COLORS[color] + text + _RESET
+
+
+def _emit(line: str) -> None:
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        print(line.encode("ascii", "replace").decode("ascii", "replace"), flush=True)
+
+
+def _console_init() -> None:
+    global VT
+    VT = _enable_windows_vt()
+
+
+def _print_banner(port: int, host: str, key: str, models: list[str]) -> None:
+    dash_url = f"http://{host}:{port}/"
+    base_url = f"http://{host}:{port}/v1"
+    shown_models = ", ".join(models[:5]) + (" …" if len(models) > 5 else "")
+
+    _emit("")
+    _emit(_paint("┌" + "─" * 62 + "┐", "dim"))
+    _emit("│ " + _paint("oc-free-api", "bright") + "  " + _paint("OpenCode Zen free models — lokal", "dim"))
+    _emit(_paint("├" + "─" * 62 + "┤", "dim"))
+    _emit("│ " + _paint(f"Dashboard  ", "cyan") + _paint(dash_url, "green"))
+    _emit("│ " + _paint(f"Base URL   ", "cyan") + _paint(base_url, "bright"))
+    _emit("│ " + _paint(f"API-Key    ", "cyan") + _paint(key, "yellow"))
+    _emit("│ " + _paint(f"Modelle    ", "cyan") + _paint(f"{len(models)} verfügbar: {shown_models}", "bright"))
+    _emit("│ " + _paint(f"Beenden    ", "cyan") + _paint("Ctrl+C hier oder Fenster schließen", "dim"))
+    _emit(_paint("├" + "─" * 62 + "┤", "dim"))
+    _emit("│ " + _paint("Live-Log der Anfragen …", "dim"))
+    _emit(_paint("└" + "─" * 62 + "┘", "dim"))
+    _emit("")
+
+
+_STATUS_WORD = {
+    200: "OK", 201: "OK", 204: "OK",
+    400: "BAD REQUEST", 401: "UNAUTHORIZED", 403: "FORBIDDEN", 404: "NOT FOUND",
+    429: "RATE LIMITED", 451: "BLOCKED",
+    500: "SERVER ERROR", 502: "UPSTREAM ERROR", 503: "SERVICE UNAVAILABLE",
+}
+
+
+def _status_color(code: int) -> str:
+    if 200 <= code < 300:
+        return "green"
+    if code == 429:
+        return "magenta"
+    if 400 <= code < 500:
+        return "yellow"
+    return "red"
+
 
 class OpenAICompatibleHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -1105,16 +1198,57 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     api_key: str = ""
 
+    # ---- console logging
+
+    def _console_line(self, code: int | str) -> None:
+        requestline = getattr(self, "requestline", "") or ""
+        parts = requestline.split(" ")
+        method = parts[0] if parts else "?"
+        path = parts[1] if len(parts) > 1 else "/"
+        try:
+            code_num = int(code)
+        except (TypeError, ValueError):
+            code_num = 0
+        word = _STATUS_WORD.get(code_num, "")
+        elapsed = self._started_at() or ""
+        line = (
+            _paint(time.strftime("%H:%M:%S"), "dim")
+            + "  "
+            + _paint(f"{method:<6}", "bright")
+            + f" {path:<38} "
+            + _paint(str(code_num or code), _status_color(code_num) if code_num else "yellow")
+        )
+        del word
+        if word:
+            line += " " + _paint(word, "dim")
+        if elapsed:
+            line += " " + _paint(elapsed, "dim")
+        REQUEST_LOG.append({"t": time.strftime("%H:%M:%S"), "msg": f"{method} {path} -> {code_num or code}"})
+        sys.stderr.write(_paint("[oc-free-api] ", "dim") + line + "\n")
+
+    def _started_at(self) -> str:
+        start = getattr(self, "_t0", None)
+        if not start:
+            return ""
+        return f"{(time.time() - start) * 1000:.0f}ms"
+
+    def log_request(self, code: Any = "-", size: Any = "-") -> None:
+        try:
+            self._console_line(code)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def log_error(self, format: str, *args: Any) -> None:  # noqa: A002
+        return
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        return
+
     # ---- helpers
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
-        message = format % args
-        REQUEST_LOG.append(
-            {"t": time.strftime("%H:%M:%S"), "msg": f"{self.address_string()} - {message}"}
-        )
-        sys.stderr.write(
-            "[oc-free-api] %s - %s\n" % (self.address_string(), message)
-        )
+        # All request logging is done by log_request with colors.
+        return
 
     def _authorized(self) -> bool:
         auth = self.headers.get("Authorization", "")
@@ -1149,6 +1283,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
     # ---- GET
 
     def do_GET(self) -> None:  # noqa: N802
+        self._t0 = time.time()
         path = self.path.split("?", 1)[0]
         if path == "/" or path == "/dashboard":
             try:
@@ -1260,6 +1395,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
     # ---- POST
 
     def do_POST(self) -> None:  # noqa: N802
+        self._t0 = time.time()
         path = self.path.split("?", 1)[0]
         if path in {"/v1/chat/completions", "/chat/completions"}:
             self._post_chat_completions()
@@ -1687,19 +1823,9 @@ def main() -> None:
     SERVER = server
     base = f"http://{args.host}:{args.port}/v1"
 
-    print("oc-free-api: OpenCode Zen free models via OpenAI-compatible API")
-    print(f"  dashboard : http://{args.host}:{args.port}/")
-    print(f"  base_url  : {base}")
-    print(f"  api_key   : {api_key}")
-    print(f"  models    : {', '.join(models)}")
-    print()
-    print("Client config:")
-    print(f'  base_url = "{base}"')
-    print(f'  api_key  = "{api_key}"')
-    print()
-    print(f"Key stored in: {KEY_FILE}")
-    if args.host != "127.0.0.1":
-        print("WARNING: bound to a non-local address. Keep it private, share no key.")
+    _console_init()
+    _print_banner(args.port, args.host, api_key, models)
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:
