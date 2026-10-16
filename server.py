@@ -20,11 +20,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
-BASE_DIR = Path(__file__).resolve().parent
-DASHBOARD_FILE = BASE_DIR / "dashboard.html"
-ASSETS_DIR = BASE_DIR / "assets"
+FROZEN = bool(getattr(sys, "frozen", False))
+BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
+RES_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))
+DASHBOARD_FILE = RES_DIR / "dashboard.html"
+ASSETS_DIR = RES_DIR / "assets"
+STATS_FILE = BASE_DIR / "stats.json"
+PRICING_FILE = BASE_DIR / "pricing.json"
 ASSET_TYPES = {".woff2": "font/woff2", ".svg": "image/svg+xml", ".css": "text/css; charset=utf-8"}
 MODEL_CACHE = BASE_DIR / "models.json"
 KEY_FILE = BASE_DIR / "api-key.txt"
@@ -1335,37 +1339,57 @@ def run_model_test(model: str, prompt: str | None = None) -> dict[str, Any]:
 class Metrics:
 
     TIMELINE_MINUTES = 30
+    SAVE_VERSION = 1
 
-    def __init__(self) -> None:
+    def __init__(self, path: Path | None = None) -> None:
         self.lock = threading.Lock()
+        self.path = path
         self.started = time.time()
+        self.saved_at: float | None = None
+        self.dirty = False
+        self._reset_counters()
+
+    def _reset_counters(self) -> None:
+        self.since = time.time()
         self.requests = 0
         self.errors = 0
         self.tokens_in = 0
         self.tokens_out = 0
+        self.tokens_cached = 0
         self.latency_total = 0.0
         self.models: dict[str, dict[str, float]] = {}
         self.minutes: dict[int, list[int]] = {}
+        self.hours: dict[int, int] = {}
+        self.limit_hits: list[float] = []
         self.log: deque = deque(maxlen=200)
+
+    @staticmethod
+    def is_limit_error(entry: dict[str, Any]) -> bool:
+        error = str(entry.get("error") or "")
+        return "FreeUsageLimit" in error or "Free usage exceeded" in error
 
     def record(self, entry: dict[str, Any], *, inference: bool) -> None:
         failed = entry["status"] >= 400 or bool(entry.get("error"))
+        tokens_in = int(entry.get("tokens_in", 0))
+        tokens_out = int(entry.get("tokens_out", 0))
+        tokens_cached = int(entry.get("tokens_cached", 0))
         with self.lock:
             self.log.append(entry)
+            self.dirty = True
             if not inference:
                 return
             self.requests += 1
             self.errors += failed
-            self.tokens_in += entry.get("tokens_in", 0)
-            self.tokens_out += entry.get("tokens_out", 0)
+            self.tokens_in += tokens_in
+            self.tokens_out += tokens_out
+            self.tokens_cached += tokens_cached
             self.latency_total += entry["ms"]
-            stats = self.models.setdefault(
-                entry["model"],
-                {"requests": 0, "errors": 0, "tokens": 0, "latency_total": 0.0, "last_ms": 0},
-            )
+            stats = self.models.setdefault(entry["model"], self._new_model_stats())
             stats["requests"] += 1
             stats["errors"] += failed
-            stats["tokens"] += entry.get("tokens_in", 0) + entry.get("tokens_out", 0)
+            stats["tokens_in"] += tokens_in
+            stats["tokens_out"] += tokens_out
+            stats["tokens_cached"] += tokens_cached
             stats["latency_total"] += entry["ms"]
             stats["last_ms"] = entry["ms"]
             minute = int(time.time() // 60)
@@ -1374,6 +1398,19 @@ class Metrics:
             bucket[1] += failed
             for old in [m for m in self.minutes if m <= minute - self.TIMELINE_MINUTES]:
                 del self.minutes[old]
+            hour = int(time.time() // 3600)
+            self.hours[hour] = self.hours.get(hour, 0) + 1
+            for old in [h for h in self.hours if h <= hour - 48]:
+                del self.hours[old]
+            if self.is_limit_error(entry):
+                self.limit_hits = (self.limit_hits + [time.time()])[-50:]
+
+    @staticmethod
+    def _new_model_stats() -> dict[str, float]:
+        return {
+            "requests": 0, "errors": 0, "tokens_in": 0, "tokens_out": 0,
+            "tokens_cached": 0, "latency_total": 0.0, "last_ms": 0,
+        }
 
     def snapshot(self) -> dict[str, Any]:
         now_minute = int(time.time() // 60)
@@ -1382,18 +1419,33 @@ class Metrics:
                 self.minutes.get(m, [0, 0])
                 for m in range(now_minute - self.TIMELINE_MINUTES + 1, now_minute + 1)
             ]
+            now = time.time()
+            hour = int(now // 3600)
             return {
+                "limits": {
+                    "requests_5h": sum(c for h, c in self.hours.items() if h > hour - 5),
+                    "requests_24h": sum(c for h, c in self.hours.items() if h > hour - 24),
+                    "last_limit_hit": self.limit_hits[-1] if self.limit_hits else None,
+                    "limit_hits_24h": sum(1 for t in self.limit_hits if t > now - 86400),
+                },
                 "uptime_s": round(time.time() - self.started),
+                "since": self.since,
+                "saved_at": self.saved_at,
+                "persistent": self.path is not None,
                 "requests": self.requests,
                 "errors": self.errors,
                 "tokens_in": self.tokens_in,
                 "tokens_out": self.tokens_out,
+                "tokens_cached": self.tokens_cached,
                 "avg_ms": round(self.latency_total / self.requests) if self.requests else None,
                 "models": {
                     name: {
                         "requests": int(s["requests"]),
                         "errors": int(s["errors"]),
-                        "tokens": int(s["tokens"]),
+                        "tokens_in": int(s["tokens_in"]),
+                        "tokens_out": int(s["tokens_out"]),
+                        "tokens_cached": int(s["tokens_cached"]),
+                        "tokens": int(s["tokens_in"] + s["tokens_out"]),
                         "avg_ms": round(s["latency_total"] / s["requests"]),
                         "last_ms": round(s["last_ms"]),
                     }
@@ -1403,8 +1455,278 @@ class Metrics:
                 "log": list(self.log),
             }
 
+    def _state(self) -> dict[str, Any]:
+        return {
+            "version": self.SAVE_VERSION,
+            "since": self.since,
+            "requests": self.requests,
+            "errors": self.errors,
+            "tokens_in": self.tokens_in,
+            "tokens_out": self.tokens_out,
+            "tokens_cached": self.tokens_cached,
+            "latency_total": self.latency_total,
+            "models": self.models,
+            "minutes": {str(k): v for k, v in self.minutes.items()},
+            "hours": {str(k): v for k, v in self.hours.items()},
+            "limit_hits": self.limit_hits,
+            "log": list(self.log),
+        }
+
+    def save(self) -> float | None:
+        if self.path is None:
+            return None
+        with self.lock:
+            data = json.dumps(self._state(), separators=(",", ":"))
+            self.dirty = False
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        try:
+            tmp.write_text(data, encoding="utf-8")
+            os.replace(tmp, self.path)
+        except OSError:
+            with self.lock:
+                self.dirty = True
+            raise
+        with self.lock:
+            self.saved_at = time.time()
+            return self.saved_at
+
+    def load(self) -> bool:
+        if self.path is None or not self.path.exists():
+            return False
+        try:
+            state = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        if not isinstance(state, dict) or state.get("version") != self.SAVE_VERSION:
+            return False
+        with self.lock:
+            self.since = float(state.get("since") or time.time())
+            self.requests = int(state.get("requests", 0))
+            self.errors = int(state.get("errors", 0))
+            self.tokens_in = int(state.get("tokens_in", 0))
+            self.tokens_out = int(state.get("tokens_out", 0))
+            self.tokens_cached = int(state.get("tokens_cached", 0))
+            self.latency_total = float(state.get("latency_total", 0.0))
+            self.models = {}
+            for name, raw in (state.get("models") or {}).items():
+                stats = self._new_model_stats()
+                if isinstance(raw, dict):
+                    stats.update({k: raw[k] for k in stats if isinstance(raw.get(k), (int, float))})
+                self.models[str(name)] = stats
+            self.minutes = {
+                int(k): [int(v[0]), int(v[1])]
+                for k, v in (state.get("minutes") or {}).items()
+                if isinstance(v, list) and len(v) == 2
+            }
+            self.hours = {
+                int(k): int(v) for k, v in (state.get("hours") or {}).items()
+                if isinstance(v, (int, float))
+            }
+            self.limit_hits = [
+                float(t) for t in state.get("limit_hits") or [] if isinstance(t, (int, float))
+            ][-50:]
+            self.log = deque(
+                (e for e in state.get("log") or [] if isinstance(e, dict)), maxlen=200
+            )
+            self.saved_at = self.path.stat().st_mtime
+            self.dirty = False
+        return True
+
+    def reset(self) -> None:
+        with self.lock:
+            self._reset_counters()
+            self.dirty = True
+
+    def autosave_loop(self, interval: float = 2.0) -> None:
+        while True:
+            time.sleep(interval)
+            if self.dirty:
+                try:
+                    self.save()
+                except OSError:
+                    pass
+
+
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+PRICING_TTL = 6 * 3600
+
+
+class Pricing:
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.lock = threading.Lock()
+        self.path = path
+        self.fetched = 0.0
+        self.prices: dict[str, dict[str, float]] = {}
+        self.error: str | None = None
+        self._refreshing = False
+        self._matches: dict[str, str | None] = {}
+        if path is not None:
+            self._load()
+
+    def _load(self) -> None:
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            self.fetched = float(data["fetched"])
+            self.prices = {str(k): dict(v) for k, v in data["prices"].items()}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
+
+    @staticmethod
+    def _price(value: Any) -> float | None:
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            return None
+        return price if price >= 0 else None
+
+    def refresh(self, timeout: float = 20.0) -> bool:
+        try:
+            data = _json_get(OPENROUTER_MODELS_URL, timeout)
+            prices: dict[str, dict[str, float]] = {}
+            for item in data.get("data") or []:
+                model_id = str(item.get("id") or "")
+                pricing = item.get("pricing") or {}
+                prompt = self._price(pricing.get("prompt"))
+                completion = self._price(pricing.get("completion"))
+                if not model_id or prompt is None or completion is None:
+                    continue
+                entry = {"prompt": prompt, "completion": completion}
+                cache_read = self._price(pricing.get("input_cache_read"))
+                if cache_read is not None:
+                    entry["cache_read"] = cache_read
+                prices[model_id] = entry
+            if not prices:
+                raise ValueError("no prices in response")
+        except (OSError, ValueError, AttributeError) as exc:
+            with self.lock:
+                self.error = str(exc)
+            return False
+        with self.lock:
+            self.prices = prices
+            self.fetched = time.time()
+            self.error = None
+            self._matches = {}
+        if self.path is not None:
+            try:
+                self.path.write_text(
+                    json.dumps({"fetched": self.fetched, "prices": prices}), encoding="utf-8"
+                )
+            except OSError:
+                pass
+        return True
+
+    def refresh_async(self, *, force: bool = False) -> None:
+        with self.lock:
+            if self._refreshing or (not force and time.time() - self.fetched < PRICING_TTL):
+                return
+            self._refreshing = True
+
+        def run() -> None:
+            try:
+                self.refresh()
+            finally:
+                with self.lock:
+                    self._refreshing = False
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def match(self, model: str) -> str | None:
+        with self.lock:
+            if model in self._matches:
+                return self._matches[model]
+        found = self._find(model)
+        with self.lock:
+            self._matches[model] = found
+        return found
+
+    def _find(self, model: str) -> str | None:
+        base = model[: -len("-free")] if model.endswith("-free") else model
+        candidates = [base]
+        if base.endswith("-preview"):
+            candidates.append(base[: -len("-preview")])
+        with self.lock:
+            ids = sorted(
+                i for i in self.prices
+                if ":" not in i and not i.startswith("~") and "/" in i
+            )
+        for candidate in candidates:
+            for model_id in ids:
+                if model_id.split("/", 1)[1] == candidate:
+                    return model_id
+        return None
+
+    def for_model(self, model: str) -> dict[str, Any] | None:
+        model_id = self.match(model)
+        if model_id is None:
+            return None
+        with self.lock:
+            return {"openrouter_id": model_id, **self.prices[model_id]}
+
+    def info(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "source": "openrouter",
+                "fetched": self.fetched or None,
+                "error": self.error,
+                "models": len(self.prices),
+            }
+
+
+def usage_cost(stats: dict[str, Any], price: dict[str, Any] | None) -> float | None:
+    if price is None:
+        return None
+    cached = min(int(stats.get("tokens_cached", 0)), int(stats.get("tokens_in", 0)))
+    uncached = int(stats.get("tokens_in", 0)) - cached
+    cache_rate = price.get("cache_read", price["prompt"])
+    return (
+        uncached * price["prompt"]
+        + cached * cache_rate
+        + int(stats.get("tokens_out", 0)) * price["completion"]
+    )
+
+
+def usage_report(snapshot: dict[str, Any], pricing: "Pricing") -> dict[str, Any]:
+    names = sorted(set(snapshot["models"]) | set(available_models()))
+    rows = []
+    total = 0.0
+    unpriced_tokens = 0
+    for name in names:
+        stats = snapshot["models"].get(name) or {
+            "requests": 0, "tokens_in": 0, "tokens_out": 0, "tokens_cached": 0, "tokens": 0,
+        }
+        price = pricing.for_model(name)
+        cost = usage_cost(stats, price)
+        if cost is not None:
+            total += cost
+        else:
+            unpriced_tokens += int(stats.get("tokens", 0))
+        rows.append(
+            {
+                "model": name,
+                "requests": int(stats.get("requests", 0)),
+                "tokens_in": int(stats.get("tokens_in", 0)),
+                "tokens_out": int(stats.get("tokens_out", 0)),
+                "tokens_cached": int(stats.get("tokens_cached", 0)),
+                "cost_usd": cost,
+                "price": None if price is None else {
+                    "openrouter_id": price["openrouter_id"],
+                    "prompt_per_m": price["prompt"] * 1_000_000,
+                    "completion_per_m": price["completion"] * 1_000_000,
+                    "cache_read_per_m": price["cache_read"] * 1_000_000 if "cache_read" in price else None,
+                },
+            }
+        )
+    return {
+        "rows": rows,
+        "total_cost_usd": total,
+        "unpriced_tokens": unpriced_tokens,
+        "pricing": pricing.info(),
+    }
+
 
 METRICS = Metrics()
+PRICING = Pricing()
 
 SERVER: Any = None
 BOUND_OPEN: bool = False
@@ -1589,6 +1911,9 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
     ("GET", "/api/dashboard/log"): ("client", "_get_dashboard_log"),
     ("POST", "/api/dashboard/test"): ("client", "_post_dashboard_test"),
     ("POST", "/api/dashboard/refresh"): ("client", "_post_refresh_models"),
+    ("POST", "/api/dashboard/save"): ("client", "_post_save_stats"),
+    ("POST", "/api/dashboard/prices"): ("client", "_post_refresh_prices"),
+    ("POST", "/api/dashboard/reset"): ("local", "_post_reset_stats"),
     ("POST", "/api/dashboard/key"): ("local", "_post_new_key"),
     ("POST", "/api/dashboard/stop"): ("local", "_post_stop_server"),
 }
@@ -1720,6 +2045,8 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             entry["model"] = model
             entry["tokens_in"] = int(usage.get("prompt_tokens", 0) or 0)
             entry["tokens_out"] = int(usage.get("completion_tokens", 0) or 0)
+            details = usage.get("prompt_tokens_details") or {}
+            entry["tokens_cached"] = int(details.get("cached_tokens", 0) or 0)
         if self._meta.get("error"):
             entry["error"] = str(self._meta["error"])[:300]
         try:
@@ -2009,7 +2336,35 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         self._send_json(200, dashboard_state(local=self._trusted()))
 
     def _get_dashboard_stats(self) -> None:
-        self._send_json(200, {"ok": True, **METRICS.snapshot()})
+        PRICING.refresh_async()
+        snapshot = METRICS.snapshot()
+        for entry in snapshot["log"]:
+            if entry.get("model"):
+                entry["cost_usd"] = usage_cost(entry, PRICING.for_model(entry["model"]))
+        self._send_json(200, {"ok": True, **snapshot, "usage": usage_report(snapshot, PRICING)})
+
+    def _post_save_stats(self) -> None:
+        if METRICS.path is None:
+            raise ProxyError("saving is disabled for this server instance.", 409)
+        try:
+            saved_at = METRICS.save()
+        except OSError as exc:
+            raise ProxyError(f"could not write {METRICS.path.name}: {exc}", 500) from exc
+        self._send_json(200, {"ok": True, "saved_at": saved_at, "file": str(METRICS.path)})
+
+    def _post_reset_stats(self) -> None:
+        METRICS.reset()
+        if METRICS.path is not None:
+            try:
+                METRICS.save()
+            except OSError as exc:
+                raise ProxyError(f"could not write {METRICS.path.name}: {exc}", 500) from exc
+        self._send_json(200, {"ok": True})
+
+    def _post_refresh_prices(self) -> None:
+        if not PRICING.refresh():
+            raise ProxyError(f"OpenRouter prices could not be loaded: {PRICING.info()['error']}", 502)
+        self._send_json(200, {"ok": True, **PRICING.info()})
 
     def _get_dashboard_log(self) -> None:
         self._send_json(200, {"ok": True, "log": METRICS.snapshot()["log"]})
@@ -2278,6 +2633,11 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--key", help="use a specific API key instead of the generated one")
     parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="do not load or save usage statistics (stats.json)",
+    )
+    parser.add_argument(
         "--refresh-models",
         action="store_true",
         help="refresh the model list once before starting",
@@ -2287,8 +2647,13 @@ def main() -> None:
     if args.key:
         _write_key(args.key.strip())
 
+    global METRICS, PRICING
     api_key = ensure_api_key()
     models = available_models(refresh=args.refresh_models)
+    METRICS = Metrics(None if args.no_save else STATS_FILE)
+    restored = METRICS.load()
+    PRICING = Pricing(PRICING_FILE)
+    PRICING.refresh_async()
     OpenAICompatibleHandler.api_key = api_key
 
     try:
@@ -2302,6 +2667,15 @@ def main() -> None:
 
     _console_init(args.port)
     _print_banner(args.port, args.host, api_key, models)
+    if restored:
+        tokens = f"{METRICS.tokens_in + METRICS.tokens_out:,}".replace(",", ".")
+        _emit(
+            "  " + _paint("Statistik ", "cyan")
+            + _paint(f"aus {STATS_FILE.name} geladen: {METRICS.requests} Anfragen, {tokens} Tokens", "dim")
+        )
+        _emit("")
+    if METRICS.path is not None:
+        threading.Thread(target=METRICS.autosave_loop, daemon=True).start()
 
     try:
         server.serve_forever()
@@ -2309,6 +2683,11 @@ def main() -> None:
         _emit("\nShutting down.")
     finally:
         server.server_close()
+        if METRICS.path is not None:
+            try:
+                METRICS.save()
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

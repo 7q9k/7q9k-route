@@ -6,6 +6,15 @@ Chat-Tools, SDKs).
 
 Nur Python-Standardbibliothek, keine Abhängigkeiten. Server für **persönliche Nutzung**.
 
+## Download
+
+Unter [Releases](https://github.com/7q9k/oc-free-api/releases) gibt es zwei Pakete:
+
+- **`oc-free-api.exe`**: Windows, ohne Python. In einen eigenen Ordner legen und doppelklicken.
+  `api-key.txt`, `stats.json` und `pricing.json` landen neben der exe.
+- **`oc-free-api-<version>-python.zip`**: für Windows, macOS und Linux mit Python 3.10 oder neuer.
+  Entpacken und `python server.py` starten (Windows: `start.bat`).
+
 ## Start
 
 ```powershell
@@ -25,6 +34,7 @@ Konsole angezeigt. Optionen:
 --host 127.0.0.1       nur lokal (kein LAN)
 --key sk-meinkey       eigenen Key setzen
 --refresh-models       Modell-Liste einmalig neu abfragen
+--no-save              Statistik weder laden noch speichern
 ```
 
 ## Zugriff und API-Key
@@ -45,6 +55,26 @@ Verlauf der letzten 30 Minuten, alle Modelle mit Test-Knopf, einen Bereich zum
 Ausprobieren (gestreamt) und das Aktivitätsprotokoll. Wer das Dashboard aus dem LAN
 öffnet, wird nach dem Key gefragt; der Key selbst wird dort nie angezeigt.
 
+### Verbrauch, Kosten und Speichern
+
+- **Tokens genau:** Eingabe, Ausgabe und Cache-Anteil pro Modell und pro Anfrage, als exakte Zahlen.
+- **Kosten:** Was dieselben Tokens bei OpenRouter gekostet hätten. Die Preise kommen live aus der
+  OpenRouter-API (`/api/v1/models`), werden alle 6 Stunden erneuert und in `pricing.json`
+  zwischengespeichert. Ein Modell bekommt nur dann einen Preis, wenn es bei OpenRouter genau
+  dasselbe Modell gibt (z. B. `glm-5.3-flash-free` → `z-ai/glm-5.3-flash`). Für Modelle ohne
+  Gegenstück (z. B. `big-pickle`) wird kein Preis geschätzt. Bei OpenCode selbst zahlst du nichts.
+- **Speichern:** Alle Zahlen landen in `stats.json`, spätestens 2 Sekunden nach jeder Anfrage und
+  beim Beenden. Beim nächsten Start sind sie wieder da. „Jetzt speichern“ speichert sofort,
+  „Zurücksetzen“ (nur am Server-Rechner) löscht die Statistik.
+
+### Gratis-Limit
+
+OpenCode ist **nicht unbegrenzt**. Die Gratis-Modelle sind nur zeitweise kostenlos und pro
+IP-Adresse begrenzt. Eine offizielle Zahl gibt es nicht; Nutzer berichten von etwa 200 Anfragen
+pro Tag. Ist das Limit erreicht, antwortet OpenCode mit HTTP 429 `FreeUsageLimitError`. Das
+Dashboard zählt deine Anfragen der letzten 5 und 24 Stunden und zeigt an, wann das Limit zuletzt
+erreicht wurde. Der Server versucht nicht, das Limit zu umgehen.
+
 ## Endpoints
 
 | Pfad | Zugriff | Beschreibung |
@@ -52,7 +82,8 @@ Ausprobieren (gestreamt) und das Aktivitätsprotokoll. Wer das Dashboard aus dem
 | `GET /` · `GET /dashboard` | offen | Web-Dashboard |
 | `GET /api/dashboard` · `GET /api/dashboard/stats` | Key / lokal | Status und Statistiken fürs Dashboard |
 | `POST /api/dashboard/test` · `/refresh` | Key / lokal | Modell testen, Modell-Liste neu abfragen |
-| `POST /api/dashboard/key` · `/stop` | nur lokal | Key neu erzeugen, Server stoppen |
+| `POST /api/dashboard/save` · `/prices` | Key / lokal | Statistik speichern, OpenRouter-Preise neu laden |
+| `POST /api/dashboard/key` · `/stop` · `/reset` | nur lokal | Key neu erzeugen, Server stoppen, Statistik zurücksetzen |
 | `GET /health` | offen | Liveness-Check |
 | `GET /v1/models` · `GET /api/v1/models` | offen | Modell-Liste (OpenAI-Format) |
 | `GET /api/tags` · `GET /api/ps` · `POST /api/show` | offen | **Ollama**-Modell-Endpoints |

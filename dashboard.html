@@ -126,6 +126,19 @@
   .log .code{ font:12.5px var(--mono); color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
   .log .code.bad{ color:var(--bad); }
   .log .errline{ color:var(--bad); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+  .usage-scroll{ overflow-x:auto; }
+  table.usage{ width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  .usage th{ padding:12px 0 8px; font-size:12.5px; font-weight:500; color:var(--muted); text-align:left; border-bottom:1px solid var(--line); white-space:nowrap; }
+  .usage td{ padding:11px 0; border-bottom:1px solid var(--line); vertical-align:top; white-space:nowrap; }
+  .usage th + th, .usage td + td{ padding-left:18px; }
+  .usage .r{ text-align:right; }
+  .usage td.r{ font:13px var(--mono); }
+  .usage .m{ font:13.5px var(--mono); }
+  .usage .p{ margin-top:1px; font-size:12px; color:var(--muted); white-space:normal; }
+  .usage td.r .p{ font-family:var(--sans); white-space:nowrap; }
+  .usage tr.idle td{ color:var(--muted); }
+  .usage tfoot td{ border-bottom:0; font-weight:600; }
+  .usage tfoot td.r{ font-weight:600; }
   .empty-row{ padding:20px 0; font-size:13.5px; color:var(--muted); }
   .scroll{ max-height:420px; overflow:auto; }
 
@@ -155,6 +168,16 @@
     .log li{ grid-template-columns:minmax(0,1fr) auto; }
     .log .t{ display:none; }
     .res{ max-width:110px; }
+    .usage thead{ display:none; }
+    .usage, .usage tbody, .usage tfoot, .usage tr{ display:block; }
+    .usage tr{ padding:11px 0; border-bottom:1px solid var(--line); }
+    .usage td{ display:block; padding:0; border:0; white-space:normal; }
+    .usage td + td{ padding-left:0; }
+    .usage td.r{ display:inline-block; margin:6px 14px 0 0; text-align:left; font-size:12.5px; }
+    .usage td.r::before{ content:attr(data-l) " "; color:var(--muted); font-family:var(--sans); }
+    .usage tfoot tr{ border-bottom:0; }
+    .section-head .tools{ flex-wrap:wrap; gap:6px 14px; justify-content:flex-end; }
+    .section-head .tools > *{ white-space:nowrap; }
     #modelSource{ display:none; }
   }
 </style>
@@ -186,12 +209,37 @@
 
     <div class="stats">
       <div class="stat"><div class="l">Anfragen</div><div class="v" id="kReq">0</div><div class="h" id="kReqHint">&nbsp;</div></div>
-      <div class="stat"><div class="l">Fehlerquote</div><div class="v" id="kErr">–</div><div class="h" id="kErrHint">&nbsp;</div></div>
       <div class="stat"><div class="l">Tokens</div><div class="v" id="kTok">0</div><div class="h" id="kTokHint">&nbsp;</div></div>
+      <div class="stat"><div class="l">Wert bei OpenRouter</div><div class="v" id="kCost">–</div><div class="h" id="kCostHint">&nbsp;</div></div>
       <div class="stat"><div class="l">Ø Antwortzeit</div><div class="v" id="kLat">–</div><div class="h" id="kLatHint">&nbsp;</div></div>
     </div>
     <div class="chart" id="chart" role="img" aria-label="Anfragen pro Minute in den letzten 30 Minuten"><div class="tip" id="tip"></div></div>
     <div class="chart-cap"><span>Anfragen pro Minute · letzte 30 Minuten</span><span id="chartErr"></span></div>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Verbrauch und Kosten</h2>
+        <span class="tools"><span class="text-btn" id="saveState" style="cursor:default"></span><button class="text-btn" id="btnSave">Jetzt speichern</button><button class="text-btn" id="btnReset" hidden>Zurücksetzen</button></span>
+      </div>
+      <div class="usage-scroll">
+        <table class="usage">
+          <thead><tr><th>Modell</th><th class="r">Anfragen</th><th class="r">Eingabe</th><th class="r">Ausgabe</th><th class="r">Kosten</th></tr></thead>
+          <tbody id="usage"></tbody>
+          <tfoot id="usageTotal"></tfoot>
+        </table>
+      </div>
+      <p class="hint" id="priceNote"></p>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Gratis-Limit</h2><span class="tools"><span class="text-btn" id="limitState" style="cursor:default"></span></span></div>
+      <ul class="rows">
+        <li><span class="k">Letzte 5 Stunden</span><span class="v num" id="lim5">–</span><span class="a"></span></li>
+        <li><span class="k">Letzte 24 Stunden</span><span class="v num" id="lim24">–</span><span class="a"></span></li>
+        <li><span class="k">Limit erreicht</span><span class="v" id="limHit">–</span><span class="a"></span></li>
+      </ul>
+      <p class="hint">OpenCode nennt kein festes Limit. Die Gratis-Modelle sind pro IP-Adresse begrenzt und nur zeitweise kostenlos. Nutzer berichten von etwa 200 Anfragen pro Tag. Ist das Limit erreicht, antwortet OpenCode mit HTTP 429 <span class="mono">FreeUsageLimitError</span>, dann hilft nur Warten.</p>
+    </section>
 
     <section class="section">
       <div class="section-head"><h2>Verbindung</h2></div>
@@ -261,6 +309,16 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = n => n == null ? '–' : n >= 1e6 ? (n/1e6).toLocaleString('de-DE',{maximumFractionDigits:1})+' Mio.' : n >= 1e4 ? (n/1e3).toLocaleString('de-DE',{maximumFractionDigits:1})+' Tsd.' : n.toLocaleString('de-DE');
+const fmtInt = n => n == null ? '–' : Math.round(n).toLocaleString('de-DE');
+const fmtUsd = v => {
+  if (v == null) return '–';
+  if (v === 0) return '0,00 $';
+  const digits = v < 0.0001 ? 6 : v < 0.01 ? 5 : v < 1 ? 4 : 2;
+  return v.toLocaleString('de-DE', {minimumFractionDigits:2, maximumFractionDigits:digits}) + ' $';
+};
+const fmtPerM = v => v == null ? '–' : v.toLocaleString('de-DE', {minimumFractionDigits:2, maximumFractionDigits:4}) + ' $';
+const fmtClock = t => t ? new Date(t*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) : '';
+const fmtDate = t => t ? new Date(t*1000).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
 const fmtMs = ms => ms == null ? '–' : ms >= 1000 ? (ms/1000).toLocaleString('de-DE',{maximumFractionDigits:1})+' s' : ms+' ms';
 const fmtDur = s => { const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60); return d ? `${d} T ${h} Std.` : h ? `${h} Std. ${m} Min.` : m ? `${m} Min.` : `${s} Sek.`; };
 
@@ -351,7 +409,7 @@ function renderModels(){
     const api = state.models.find(m=>m.id===li.dataset.m)?.api === 'responses' ? 'Responses-API' : 'Chat-API';
     const s = per[li.dataset.m];
     li.querySelector('[data-f=sub]').innerHTML = `<span>${api}</span>` + (s
-      ? `<span>${fmt(s.requests)} Anfragen</span>${s.errors?`<span class="bad">${fmt(s.errors)} Fehler</span>`:''}<span>Ø ${fmtMs(s.avg_ms)}</span><span>${fmt(s.tokens)} Tokens</span>`
+      ? `<span>${fmtInt(s.requests)} Anfragen</span>${s.errors?`<span class="bad">${fmtInt(s.errors)} Fehler</span>`:''}<span>Ø ${fmtMs(s.avg_ms)}</span>`
       : '<span>noch nicht genutzt</span>');
   }
   $('modelCount').textContent = '· '+ids.length;
@@ -374,21 +432,64 @@ async function testModel(li){
 
 function renderStats(){
   const s=stats; if(!s) return;
-  $('kReq').textContent = fmt(s.requests);
-  $('kReqHint').textContent = `${s.timeline.slice(-5).reduce((a,b)=>a+b.requests,0)} in 5 Minuten`;
+  $('kReq').textContent = fmtInt(s.requests);
   const rate = s.requests ? s.errors/s.requests*100 : 0;
-  $('kErr').textContent = s.requests ? rate.toLocaleString('de-DE',{maximumFractionDigits:1})+' %' : '–';
-  $('kErr').classList.toggle('bad', rate >= 10);
-  $('kErrHint').textContent = s.errors ? `${fmt(s.errors)} fehlgeschlagen` : 'keine Fehler';
-  $('kTok').textContent = fmt(s.tokens_in + s.tokens_out);
-  $('kTokHint').textContent = `${fmt(s.tokens_in)} rein · ${fmt(s.tokens_out)} raus`;
+  $('kReqHint').innerHTML = s.errors
+    ? `<span style="color:var(--bad)">${fmtInt(s.errors)} Fehler · ${rate.toLocaleString('de-DE',{maximumFractionDigits:1})} %</span>`
+    : 'keine Fehler';
+  $('kTok').textContent = fmtInt(s.tokens_in + s.tokens_out);
+  $('kTokHint').textContent = `${fmtInt(s.tokens_in)} Eingabe · ${fmtInt(s.tokens_out)} Ausgabe`;
+  $('kCost').textContent = fmtUsd(s.usage?.total_cost_usd ?? 0);
+  $('kCostHint').textContent = s.usage?.unpriced_tokens ? `ohne ${fmtInt(s.usage.unpriced_tokens)} Tokens ohne Preis` : 'du zahlst 0 $';
   $('kLat').textContent = fmtMs(s.avg_ms);
   const last=[...s.log].reverse().find(e=>e.model);
   $('kLatHint').textContent = last ? `zuletzt ${fmtMs(last.ms)}` : 'noch keine Anfrage';
   $('uptime').textContent = 'seit '+fmtDur(s.uptime_s);
   const errs = s.timeline.reduce((a,b)=>a+b.errors,0);
   $('chartErr').innerHTML = errs ? `<span style="color:var(--bad)">${errs} Fehler</span>` : '';
-  renderChart(); renderModels(); renderLog();
+  renderChart(); renderModels(); renderLog(); renderUsage(); renderLimits(); renderSave();
+}
+
+function renderUsage(){
+  const u=stats?.usage; if(!u) return;
+  const rows=[...u.rows].sort((a,b)=>(b.tokens_in+b.tokens_out)-(a.tokens_in+a.tokens_out) || a.model.localeCompare(b.model));
+  $('usage').innerHTML = rows.map(r=>{
+    const p=r.price;
+    const priceLine = p
+      ? `${esc(p.openrouter_id)} · ${fmtPerM(p.prompt_per_m)} Eingabe / ${fmtPerM(p.completion_per_m)} Ausgabe pro 1 Mio. Tokens`
+      : 'kein passendes Modell bei OpenRouter, daher kein Preis';
+    const cached = r.tokens_cached ? ` <span class="p">(${fmtInt(r.tokens_cached)} Cache)</span>` : '';
+    return `<tr class="${r.requests?'':'idle'}"><td><div class="m">${esc(r.model)}</div><div class="p">${priceLine}</div></td><td class="r" data-l="Anfragen">${fmtInt(r.requests)}</td><td class="r" data-l="Eingabe">${fmtInt(r.tokens_in)}${cached}</td><td class="r" data-l="Ausgabe">${fmtInt(r.tokens_out)}</td><td class="r" data-l="Kosten">${r.cost_usd==null?'–':fmtUsd(r.cost_usd)}</td></tr>`;
+  }).join('');
+  const sum=k=>u.rows.reduce((a,r)=>a+r[k],0);
+  $('usageTotal').innerHTML = `<tr><td>Gesamt</td><td class="r" data-l="Anfragen">${fmtInt(sum('requests'))}</td><td class="r" data-l="Eingabe">${fmtInt(sum('tokens_in'))}</td><td class="r" data-l="Ausgabe">${fmtInt(sum('tokens_out'))}</td><td class="r" data-l="Kosten">${fmtUsd(u.total_cost_usd)}</td></tr>`;
+  const pi=u.pricing||{};
+  $('priceNote').textContent = (pi.fetched
+    ? `Preise live von OpenRouter (${fmtInt(pi.models)} Modelle, Stand ${fmtDate(pi.fetched)}). `
+    : 'OpenRouter-Preise werden geladen. ')
+    + 'So viel hätten dieselben Tokens bei OpenRouter gekostet. Bei OpenCode zahlst du nichts.'
+    + (pi.error ? ` Letzte Abfrage fehlgeschlagen: ${pi.error}` : '');
+}
+
+function renderLimits(){
+  const l=stats?.limits; if(!l) return;
+  $('lim5').textContent = `${fmtInt(l.requests_5h)} Anfragen`;
+  $('lim24').textContent = `${fmtInt(l.requests_24h)} Anfragen`;
+  const recent = l.last_limit_hit && Date.now()/1000 - l.last_limit_hit < 86400;
+  $('limHit').innerHTML = l.last_limit_hit
+    ? `<span style="color:${recent?'var(--bad)':'inherit'}">${fmtDate(l.last_limit_hit)}</span>${l.limit_hits_24h>1?` · ${l.limit_hits_24h}× in 24 Std.`:''}`
+    : 'noch nie';
+  const st=$('limitState');
+  st.innerHTML = recent ? '<span style="color:var(--bad)">Limit kürzlich erreicht</span>' : 'kein Limit erreicht';
+}
+
+function renderSave(){
+  const s=stats; if(!s) return;
+  $('btnSave').hidden = !s.persistent;
+  $('btnReset').hidden = !state?.local;
+  $('saveState').textContent = !s.persistent
+    ? 'Speichern ist aus (--no-save)'
+    : (s.saved_at ? `Gespeichert ${fmtClock(s.saved_at)}` : 'Noch nicht gespeichert') + (s.since ? ` · Daten seit ${new Date(s.since*1000).toLocaleDateString('de-DE')}` : '');
 }
 
 function renderChart(){
@@ -424,7 +525,7 @@ function renderLog(){
   $('log').innerHTML = rows.length ? rows.map(e=>{
     const bad = e.status>=400 || e.error;
     const tok=(e.tokens_in||0)+(e.tokens_out||0);
-    const sub=[e.model, tok?fmt(tok)+' Tokens':'', e.client!=='lokal'?e.client:''].filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join('');
+    const sub=[e.model, tok?`${fmtInt(e.tokens_in||0)} ein · ${fmtInt(e.tokens_out||0)} aus`:'', tok&&e.cost_usd!=null?fmtUsd(e.cost_usd):'', e.client!=='lokal'?e.client:''].filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join('');
     return `<li><span class="t">${esc(e.t)}</span><div style="min-width:0"><div class="l-title">${esc(e.method)} ${esc(e.path)}</div>${sub||e.error?`<div class="l-sub">${sub}${e.error?`<span class="errline" title="${esc(e.error)}">${esc(e.error.slice(0,140))}</span>`:''}</div>`:''}</div><span class="code ${bad?'bad':''}">${e.status||'—'} · ${fmtMs(e.ms)}</span></li>`;
   }).join('') : `<li class="empty-row" style="display:block">${logFilter==='err'?'Keine Fehler.':'Noch keine Anfragen. Schick oben eine Nachricht oder teste ein Modell.'}</li>`;
 }
@@ -453,6 +554,8 @@ radio($('logFilter'), b=>{ logFilter=b.dataset.f; renderLog(); });
 $('btnRefresh').onclick=e=>busy(e.currentTarget, async()=>{ const r=await api('/api/dashboard/refresh',{}); await loadState(); toast(r.source==='live'?`${r.models.length} Modelle live abgefragt`:'Abfrage fehlgeschlagen. Die bisherige Liste bleibt.'); });
 $('btnTestAll').onclick=e=>busy(e.currentTarget, async()=>{ for (const li of $('models').children) await testModel(li); });
 armed($('btnKey'), 'Wirklich neu erzeugen?', async()=>{ await api('/api/dashboard/key',{}); await loadState(); toast('Neuer Key ist aktiv. Clients brauchen ihn jetzt.'); });
+$('btnSave').onclick=e=>busy(e.currentTarget, async()=>{ const r=await api('/api/dashboard/save',{}); toast(`Gespeichert in ${r.file.split(/[\\/]/).pop()}`); refreshStats(); });
+armed($('btnReset'), 'Wirklich alles löschen?', async()=>{ await api('/api/dashboard/reset',{}); toast('Statistik zurückgesetzt'); refreshStats(); });
 armed($('btnStop'), 'Wirklich stoppen?', async()=>{ await api('/api/dashboard/stop',{}); toast('Server wird gestoppt'); setTimeout(()=>setState(false),600); });
 
 let pgAbort=null;

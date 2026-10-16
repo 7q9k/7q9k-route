@@ -18,6 +18,22 @@ import server
 KEY = "sk-oc-free-test"
 MODELS = ["big-pickle", "muse-spark-1.3-contributor-free"]
 
+FAKE_PRICES = {
+    "meta/muse-spark-1.3-contributor": {"prompt": 1e-07, "completion": 2e-07, "cache_read": 2e-09},
+    "meta/muse-spark-1.3": {"prompt": 1.25e-06, "completion": 4.25e-06},
+    "z-ai/glm-5.3-flash": {"prompt": 2e-08, "completion": 7e-07},
+    "z-ai/glm-5.3-flash:free": {"prompt": 0.0, "completion": 0.0},
+    "inclusionai/longcat-2.5": {"prompt": 3e-07, "completion": 1.2e-06},
+}
+
+
+def fake_pricing():
+    pricing = server.Pricing()
+    pricing.prices = dict(FAKE_PRICES)
+    pricing.fetched = 1_700_000_000.0
+    pricing.refresh_async = lambda **k: None
+    return pricing
+
 
 def chunk(content=None, *, finish=None, usage=None, tool=None):
     delta = {}
@@ -191,6 +207,81 @@ class PureFunctionTests(unittest.TestCase):
         self.assertEqual(stream[-1]["response"]["usage"]["total_tokens"], 7)
         self.assertTrue(all(i["status"] == "completed" for i in out if "status" in i))
 
+    def test_metrics_save_and_load_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "stats.json"
+            m = server.Metrics(path)
+            m.record({"status": 200, "ms": 100, "model": "a", "tokens_in": 1000,
+                      "tokens_out": 250, "tokens_cached": 400}, inference=True)
+            m.record({"status": 429, "ms": 5, "model": "a",
+                      "error": 'upstream rejected request (HTTP 429): {"type":"FreeUsageLimitError"}'},
+                     inference=True)
+            self.assertTrue(m.dirty)
+            self.assertIsNotNone(m.save())
+            self.assertFalse(m.dirty)
+            again = server.Metrics(path)
+            self.assertTrue(again.load())
+            snap = again.snapshot()
+            self.assertEqual((snap["requests"], snap["errors"]), (2, 1))
+            self.assertEqual((snap["tokens_in"], snap["tokens_out"], snap["tokens_cached"]), (1000, 250, 400))
+            self.assertEqual(snap["models"]["a"]["tokens_in"], 1000)
+            self.assertEqual(len(snap["log"]), 2)
+            self.assertEqual(snap["limits"]["requests_24h"], 2)
+            self.assertIsNotNone(snap["limits"]["last_limit_hit"])
+            self.assertIsNotNone(snap["saved_at"])
+            again.reset()
+            self.assertEqual(again.snapshot()["requests"], 0)
+
+    def test_metrics_load_ignores_broken_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "stats.json"
+            path.write_text("{kaputt", encoding="utf-8")
+            self.assertFalse(server.Metrics(path).load())
+            self.assertFalse(server.Metrics(Path(tmp) / "missing.json").load())
+
+    def test_limit_error_detection(self):
+        hit = server.Metrics.is_limit_error
+        self.assertTrue(hit({"status": 429, "error": "upstream rejected request (HTTP 429): FreeUsageLimitError"}))
+        self.assertTrue(hit({"status": 200, "error": "Free usage exceeded, subscribe to Go"}))
+        self.assertFalse(hit({"status": 500, "error": "internal error"}))
+        self.assertFalse(hit({"status": 429, "error": 'upstream rejected request (HTTP 429): {"error":{"type":"server_error","message":"Upstream request failed: Endpoint is unavailable."}}'}))
+        self.assertFalse(hit({"status": 200}))
+
+    def test_pricing_match_uses_exact_paid_model(self):
+        p = fake_pricing()
+        self.assertEqual(p.match("muse-spark-1.3-contributor-free"), "meta/muse-spark-1.3-contributor")
+        self.assertEqual(p.match("glm-5.3-flash-free"), "z-ai/glm-5.3-flash")
+        self.assertEqual(p.match("longcat-2.5-preview-free"), "inclusionai/longcat-2.5")
+        self.assertIsNone(p.match("big-pickle"))
+        self.assertIsNone(p.match("muse-spark-free"))
+
+    def test_usage_cost(self):
+        price = {"prompt": 1e-06, "completion": 2e-06, "cache_read": 1e-07}
+        cost = server.usage_cost({"tokens_in": 1000, "tokens_out": 500, "tokens_cached": 200}, price)
+        self.assertAlmostEqual(cost, 800 * 1e-06 + 200 * 1e-07 + 500 * 2e-06)
+        self.assertIsNone(server.usage_cost({"tokens_in": 1}, None))
+        no_cache_price = {"prompt": 1e-06, "completion": 2e-06}
+        self.assertAlmostEqual(server.usage_cost({"tokens_in": 10, "tokens_cached": 5}, no_cache_price), 1e-05)
+
+    def test_pricing_refresh_parses_openrouter(self):
+        payload = {"data": [
+            {"id": "z-ai/glm-5.3-flash", "pricing": {"prompt": "0.00000002", "completion": "0.0000007",
+                                                     "input_cache_read": "0.00000001"}},
+            {"id": "broken/model", "pricing": {"prompt": "x"}},
+        ]}
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(server, "_json_get", lambda url, timeout: payload):
+            p = server.Pricing(Path(tmp) / "pricing.json")
+            self.assertTrue(p.refresh())
+            self.assertEqual(set(p.prices), {"z-ai/glm-5.3-flash"})
+            self.assertEqual(p.prices["z-ai/glm-5.3-flash"]["cache_read"], 1e-08)
+            cached = server.Pricing(Path(tmp) / "pricing.json")
+            self.assertEqual(cached.prices, p.prices)
+        with mock.patch.object(server, "_json_get", side_effect=OSError("offline")):
+            p = server.Pricing()
+            self.assertFalse(p.refresh())
+            self.assertIn("offline", p.info()["error"])
+
     def test_metrics_timeline_and_models(self):
         m = server.Metrics()
         m.record({"status": 200, "ms": 100, "model": "a", "tokens_in": 1, "tokens_out": 2}, inference=True)
@@ -240,7 +331,10 @@ class ServerTests(unittest.TestCase):
 
     def setUp(self):
         self.settle()
-        server.METRICS = server.Metrics()
+        self.stats_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.stats_dir.cleanup)
+        server.METRICS = server.Metrics(Path(self.stats_dir.name) / "stats.json")
+        server.PRICING = fake_pricing()
         self.upstream = mock.patch.object(server, "open_upstream_events", fake_upstream(OK_EVENTS))
         self.upstream.start()
         self.addCleanup(self.upstream.stop)
@@ -467,6 +561,51 @@ class ServerTests(unittest.TestCase):
         entry = stats["log"][0]
         self.assertEqual((entry["path"], entry["status"], entry["model"]),
                          ("/v1/chat/completions", 200, "big-pickle"))
+
+    def test_stats_include_usage_costs_and_limits(self):
+        self.request("POST", "/v1/chat/completions", {"model": "muse-spark-1.3-contributor-free"})
+        self.settle()
+        stats = json.loads(self.request("GET", "/api/dashboard/stats")[1])
+        rows = {r["model"]: r for r in stats["usage"]["rows"]}
+        muse = rows["muse-spark-1.3-contributor-free"]
+        self.assertEqual((muse["tokens_in"], muse["tokens_out"]), (5, 2))
+        self.assertAlmostEqual(muse["cost_usd"], 5 * 1e-07 + 2 * 2e-07)
+        self.assertEqual(muse["price"]["openrouter_id"], "meta/muse-spark-1.3-contributor")
+        self.assertAlmostEqual(muse["price"]["prompt_per_m"], 0.1)
+        self.assertIsNone(rows["big-pickle"]["cost_usd"])
+        self.assertAlmostEqual(stats["usage"]["total_cost_usd"], muse["cost_usd"])
+        self.assertAlmostEqual(stats["log"][-1]["cost_usd"], muse["cost_usd"])
+        self.assertEqual(stats["limits"]["requests_24h"], 1)
+        self.assertTrue(stats["persistent"])
+
+    def test_save_and_reset_endpoints(self):
+        self.request("POST", "/v1/chat/completions", {"model": "big-pickle"})
+        self.settle()
+        status, body = self.request("POST", "/api/dashboard/save", {})
+        self.assertEqual(status, 200)
+        saved = json.loads(Path(json.loads(body)["file"]).read_text(encoding="utf-8"))
+        self.assertEqual(saved["requests"], 1)
+        self.as_remote()
+        ok = {"Authorization": f"Bearer {KEY}"}
+        self.assertEqual(self.request("POST", "/api/dashboard/save", {}, ok)[0], 200)
+        self.assertEqual(self.request("POST", "/api/dashboard/reset", {}, ok)[0], 403)
+
+    def test_reset_endpoint_local(self):
+        self.request("POST", "/v1/chat/completions", {"model": "big-pickle"})
+        self.settle()
+        self.assertEqual(self.request("POST", "/api/dashboard/reset", {})[0], 200)
+        self.settle()
+        self.assertEqual(server.METRICS.snapshot()["requests"], 0)
+
+    def test_free_limit_hit_is_tracked(self):
+        def limited(req, model):
+            raise server.ProxyError(
+                'upstream rejected request (HTTP 429): {"type":"FreeUsageLimitError"}', 429)
+        with mock.patch.object(server, "open_upstream_events", limited):
+            status, _ = self.request("POST", "/v1/chat/completions", {"model": "big-pickle"})
+        self.assertEqual(status, 429)
+        self.settle()
+        self.assertIsNotNone(server.METRICS.snapshot()["limits"]["last_limit_hit"])
 
     def test_dashboard_test_endpoint(self):
         status, body = self.request("POST", "/api/dashboard/test", {"model": "big-pickle"})

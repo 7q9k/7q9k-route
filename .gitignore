@@ -4,3 +4,9 @@ examples/demo-workspace/
 *.pyc
 __pycache__/
 hermes-oc-free-provider/
+stats.json
+stats.json.tmp
+pricing.json
+build/
+dist/
+*.spec
