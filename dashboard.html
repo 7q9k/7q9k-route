@@ -961,7 +961,8 @@ async function sendPrompt(){
         if(j.usage) usage=j.usage;
         for(const c of j.choices||[]){
           const d=c.delta||{};
-          if(d.reasoning_content){ think.hidden=false; think.textContent+=d.reasoning_content; think.scrollTop=1e9; }
+          const thought=d.reasoning_content||d.reasoning;
+          if(thought){ think.hidden=false; think.textContent+=thought; think.scrollTop=1e9; }
           if(d.content){ if(first==null) first=performance.now()-t0; text.textContent+=d.content; }
         }
         meta.textContent = `${model} · ${first!=null ? 'Writing' : 'Thinking'}`;

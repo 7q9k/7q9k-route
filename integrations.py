@@ -43,9 +43,12 @@ def _read_text(path: Path) -> tuple[str, str, bool]:
 def _write_text(path: Path, text: str, newline: str, bom: bool, backup_dir: Path) -> None:
     if path.exists():
         backup_dir.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        shutil.copy2(path, backup_dir / f"{path.name}.{stamp}.bak")
-        old = sorted(backup_dir.glob(f"{path.name}.*.bak"))
+        # Several apps use the same file name in different folders (one per profile),
+        # and two writes can land in the same second.
+        label = f"{path.parent.name}-{path.name}"
+        stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{time.time_ns() % 1_000_000_000:09d}"
+        shutil.copy2(path, backup_dir / f"{label}.{stamp}.bak")
+        old = sorted(backup_dir.glob(f"{label}.*.bak"))
         for extra in old[:-BACKUPS_KEPT]:
             try:
                 extra.unlink()
@@ -261,21 +264,45 @@ class Hermes(Integration):
             "models": {m: {} for m in target.models},
         }
 
-    def _find(self, lines: list[str]) -> tuple[int, int | None]:
+    @staticmethod
+    def _indent(lines: list[str], top: int) -> str:
+        # YAML allows the list items at the same indent as the key ("- name: x").
+        for line in lines[top + 1:]:
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            match = re.match(r"^( *)- ", line)
+            return match.group(1) if match else "  "
+        return "  "
+
+    @staticmethod
+    def _list_end(lines: list[str], top: int, indent: str) -> int:
+        end = top + 1
+        while end < len(lines):
+            line = lines[end]
+            if line.strip() and not line.startswith(" ") and not line.lstrip().startswith("#") \
+                    and not (indent == "" and line.startswith("-")):
+                break
+            end += 1
+        while end > top + 1 and not lines[end - 1].strip():
+            end -= 1
+        return end
+
+    def _find(self, lines: list[str]) -> tuple[int, int | None, str]:
         top = next((i for i, l in enumerate(lines) if re.match(r"^custom_providers:", l)), -1)
         if top < 0:
-            return -1, None
-        for i in range(top + 1, _block_end(lines, top, 0)):
+            return -1, None, "  "
+        indent = self._indent(lines, top)
+        for i in range(top + 1, self._list_end(lines, top, indent)):
             line = lines[i]
-            if re.match(r"^  - \{", line) and f'"name": "{DISPLAY_NAME}"' in line:
-                return top, i
-            if re.match(rf"^  - name:\s*['\"]?{re.escape(DISPLAY_NAME)}['\"]?\s*$", line):
-                return top, i
-        return top, None
+            if re.match(rf"^{indent}- \{{", line) and f'"name": "{DISPLAY_NAME}"' in line:
+                return top, i, indent
+            if re.match(rf"^{indent}- name:\s*['\"]?{re.escape(DISPLAY_NAME)}['\"]?\s*$", line):
+                return top, i, indent
+        return top, None, indent
 
-    def _item_end(self, lines: list[str], item: int) -> int:
+    def _item_end(self, lines: list[str], item: int, indent: str) -> int:
         end = item + 1
-        while end < len(lines) and (lines[end].startswith("    ") or not lines[end].strip()):
+        while end < len(lines) and (lines[end].startswith(indent + "  ") or not lines[end].strip()):
             end += 1
         while end > item + 1 and not lines[end - 1].strip():
             end -= 1
@@ -286,10 +313,10 @@ class Hermes(Integration):
         if not path.exists():
             return "not_connected"
         lines = _read_text(path)[0].split("\n")
-        _, item = self._find(lines)
+        _, item, indent = self._find(lines)
         if item is None:
             return "not_connected"
-        block = "\n".join(lines[item:self._item_end(lines, item)])
+        block = "\n".join(lines[item:self._item_end(lines, item, indent)])
         wanted = self.provider_value(target)
         if lines[item].lstrip().startswith("- {"):
             try:
@@ -302,13 +329,13 @@ class Hermes(Integration):
         return "connected" if ok else "outdated"
 
     def connect(self, target: Target, backup_dir: Path) -> None:
-        self._apply(f"  - {_flow(self.provider_value(target))}", backup_dir)
+        self._apply(self.provider_value(target), backup_dir)
 
     def disconnect(self, backup_dir: Path) -> None:
         if self.config_paths()[0].exists():
             self._apply(None, backup_dir)
 
-    def _apply(self, new_line: str | None, backup_dir: Path) -> None:
+    def _apply(self, value: dict[str, Any] | None, backup_dir: Path) -> None:
         path = self.config_paths()[0]
         if path.exists():
             text, newline, bom = _read_text(path)
@@ -317,15 +344,18 @@ class Hermes(Integration):
         lines = text.split("\n")
         if lines and lines[-1] == "":
             lines.pop()
-        top, item = self._find(lines)
-        if new_line is None:
+        top, item, indent = self._find(lines)
+        if value is None:
             if item is None:
                 return
-            del lines[item:self._item_end(lines, item)]
-            remaining = [l for l in lines[top + 1:_block_end(lines, top, 0)] if l.strip() and not l.lstrip().startswith("#")]
+            del lines[item:self._item_end(lines, item, indent)]
+            remaining = [l for l in lines[top + 1:self._list_end(lines, top, indent)]
+                         if l.strip() and not l.lstrip().startswith("#")]
             if not remaining:
                 lines[top] = "custom_providers: []"
-        elif top < 0:
+            return _write_text(path, "\n".join(lines) + "\n", newline, bom, backup_dir)
+        new_line = f"{indent}- {_flow(value)}"
+        if top < 0:
             lines += ["custom_providers:", new_line]
         else:
             rest = lines[top].split(":", 1)[1].strip()
@@ -333,7 +363,7 @@ class Hermes(Integration):
                 raise IntegrationError("custom_providers is written in a form oc-free-api cannot edit safely")
             lines[top] = "custom_providers:"
             if item is not None:
-                lines[item:self._item_end(lines, item)] = [new_line]
+                lines[item:self._item_end(lines, item, indent)] = [new_line]
             else:
                 lines.insert(top + 1, new_line)
         _write_text(path, "\n".join(lines) + "\n", newline, bom, backup_dir)

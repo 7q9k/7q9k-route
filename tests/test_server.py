@@ -304,7 +304,9 @@ class PureFunctionTests(unittest.TestCase):
             self.assertNotIn("extra", config)
             with mock.patch.dict(server.os.environ, {"OCFREE_ACCESS": "local", "OCFREE_PORT": "9001"}):
                 config = server.load_config()
-            self.assertEqual((config["access"], config["port"]), ("local", 9001))
+                overrides = server.env_overrides()
+            self.assertEqual((config["access"], config["port"]), ("network", 8787))
+            self.assertEqual(overrides, {"access": "local", "port": 9001})
 
     def test_metrics_timeline_and_models(self):
         m = server.Metrics()

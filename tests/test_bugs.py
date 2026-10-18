@@ -319,5 +319,72 @@ class ServerBugTests(unittest.TestCase):
 
 
 
+class FixRegressionTests(unittest.TestCase):
+    def build(self, events):
+        b = server.ResponsesBuilder("m", {})
+        stream = b.start()
+        for e in events:
+            stream += b.feed(e)
+        return stream + b.finish()
+
+    def test_responses_tool_arguments_survive_interleaving(self):
+        def tool(index, args, **extra):
+            return {"choices": [{"delta": {"tool_calls": [{"index": index, "function": {"arguments": args}, **extra}]}}]}
+        stream = self.build([
+            tool(0, '{"a":', id="c1", type="function"),
+            {"choices": [{"delta": {"reasoning_content": "hmm"}}]},
+            tool(1, '{"b":2}', id="c2"),
+            {"choices": [{"delta": {"content": "text"}}]},
+            tool(0, "1}"),
+        ])
+        out = stream[-1]["response"]["output"]
+        calls = [i for i in out if i["type"] == "function_call"]
+        self.assertEqual([(c["call_id"], c["arguments"]) for c in calls], [("c1", '{"a":1}'), ("c2", '{"b":2}')])
+        done = [e["arguments"] for e in stream if e["type"] == "response.function_call_arguments.done"]
+        self.assertEqual(done, ['{"a":1}', '{"b":2}'])
+        self.assertEqual([e["sequence_number"] for e in stream], list(range(len(stream))))
+        added = [e for e in stream if e["type"] == "response.output_item.added"]
+        self.assertEqual(len(added), len(out))
+
+    def test_bad_port_in_config_falls_back(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(server, "CONFIG_FILE", Path(tmp) / "c.json"):
+            server.CONFIG_FILE.write_text('{"port": 70000}', encoding="utf-8")
+            self.assertEqual(server.load_config()["port"], 8787)
+
+    def test_env_overrides_not_saved(self):
+        with tempfile.TemporaryDirectory() as tmp,                 mock.patch.object(server, "CONFIG_FILE", Path(tmp) / "c.json"),                 mock.patch.object(server, "DATA_DIR", Path(tmp)),                 mock.patch.dict(server.os.environ, {"OCFREE_PORT": "9999"}),                 mock.patch.object(server, "CONFIG", server.load_config()):
+            server.save_config()
+            self.assertEqual(json.loads(server.CONFIG_FILE.read_text(encoding="utf-8"))["port"], 8787)
+
+    def test_snapshot_with_zero_request_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "stats.json"
+            path.write_text(json.dumps({"version": 1, "models": {"x": {"requests": 0}}}), encoding="utf-8")
+            m = server.Metrics(path)
+            self.assertTrue(m.load())
+            self.assertIsNone(m.snapshot()["models"]["x"]["avg_ms"])
+
+    def test_busy_port_is_not_bound_twice(self):
+        first = server._bind("127.0.0.1", 0, 0)
+        try:
+            with self.assertRaises(OSError):
+                server._bind("127.0.0.1", first.server_address[1], 0)
+            self.assertFalse(server.port_available("127.0.0.1", first.server_address[1]))
+        finally:
+            first.server_close()
+
+    def test_ipv6_bind(self):
+        try:
+            srv = server._bind("::1", 0, 0)
+        except OSError as exc:
+            self.skipTest(f"no IPv6 here: {exc}")
+        srv.server_close()
+
+    def test_responses_request_keeps_images(self):
+        body = server.build_responses_request({"model": "m", "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "what"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}]}]})
+        self.assertEqual(body["input"][0]["content"][1], {"type": "input_image", "image_url": "data:image/png;base64,AA"})
+
+
 if __name__ == "__main__":
     unittest.main()

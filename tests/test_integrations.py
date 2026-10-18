@@ -95,7 +95,7 @@ class DeepSeekTests(Base):
         self.assertEqual(self.app.status(target(key="sk-other")), "connected")
         self.app.disconnect(self.backups)
         self.assertEqual(self.path.read_bytes().decode("utf-8").replace("\r\n", "\n"), DSH_PATCH)
-        self.assertTrue(list(self.backups.glob("cordis.patch.yml.*.bak")))
+        self.assertTrue(list(self.backups.glob("desktop-cordis.patch.yml.*.bak")))
 
     def test_keeps_other_providers_and_replaces_block_form(self):
         text = DSH_PATCH.replace("    providers: {}", "    providers:\n      openai:\n        apiKeyEnv: OPENAI_API_KEY\n      oc-free:\n        api: openai-completions\n        baseURL: http://old/v1")
@@ -166,6 +166,21 @@ class HermesTests(Base):
         self.assertEqual(self.path.read_text(encoding="utf-8"), "custom_providers: []\nlater: 1\n")
 
 
+    def test_unindented_list_keeps_valid_indent(self):
+        original = "custom_providers:\n- name: other\n  base_url: http://x\nmodel: foo\n"
+        self.path.write_text(original, encoding="utf-8")
+        self.app.connect(target(), self.backups)
+        lines = self.path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines[0], "custom_providers:")
+        self.assertTrue(lines[1].startswith('- {"name": "oc-free-api"'), lines)
+        self.assertEqual(lines[2:], ["- name: other", "  base_url: http://x", "model: foo"])
+        self.assertEqual(self.app.status(target()), "connected")
+        self.app.connect(target(key="other-key-1"), self.backups)
+        self.assertEqual(self.path.read_text(encoding="utf-8").count("oc-free-api"), 1)
+        self.app.disconnect(self.backups)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), original)
+
+
 class RegistryTests(Base):
     def test_detection_and_sync(self):
         apps = {a["id"]: a for a in integrations.describe_all(target())}
@@ -185,7 +200,20 @@ class RegistryTests(Base):
         for i in range(14):
             with mock.patch.object(integrations.time, "strftime", return_value=f"2026{i:04d}"):
                 integrations.Hermes().connect(target(key=f"key-number-{i}"), self.backups)
-        self.assertEqual(len(list(self.backups.glob("config.yaml.*.bak"))), integrations.BACKUPS_KEPT)
+        self.assertEqual(len(list(self.backups.glob("*config.yaml.*.bak"))), integrations.BACKUPS_KEPT)
+
+    def test_backups_of_profiles_do_not_overwrite_each_other(self):
+        for name in ("a", "b"):
+            path = self.home / ".dsh" / "profiles" / name / "cordis.patch.yml"
+            path.parent.mkdir(parents=True)
+            path.write_text(f"# profile {name}\n", encoding="utf-8")
+        with mock.patch.object(integrations.time, "strftime", return_value="20260101-000000"):
+            integrations.DeepSeekHarness().connect(target(), self.backups)
+            integrations.DeepSeekHarness().connect(target(key="second-key"), self.backups)
+        contents = sorted(p.read_text(encoding="utf-8") for p in self.backups.glob("*.bak"))
+        self.assertEqual(len(contents), 4)
+        self.assertEqual(contents.count("# profile a\n"), 1)
+        self.assertEqual(contents.count("# profile b\n"), 1)
 
     def test_unknown_app(self):
         with self.assertRaises(integrations.IntegrationError):

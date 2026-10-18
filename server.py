@@ -28,7 +28,7 @@ from typing import Any, Iterator
 
 import integrations
 
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -523,6 +523,12 @@ def _responses_content(content: Any, *, output: bool = False) -> list[dict[str, 
         kind = str(part.get("type") or "")
         if kind in {"text", "input_text", "output_text"}:
             result.append({"type": text_type, "text": str(part.get("text") or "")})
+        elif kind in {"image_url", "input_image"} and not output:
+            url = part.get("image_url") or ""
+            if isinstance(url, dict):
+                url = url.get("url") or ""
+            if url:
+                result.append({"type": "input_image", "image_url": str(url)})
     return result
 
 
@@ -1108,36 +1114,36 @@ class ResponsesBuilder:
                 events.append(self._event("response.output_text.delta", item_id=item["id"],
                                           output_index=self.output.index(item), content_index=0,
                                           delta=str(delta["content"])))
+            # Tool calls are buffered and sent in finish(): upstream may interleave
+            # argument chunks with text, reasoning or other calls.
             for raw in delta.get("tool_calls") or []:
                 index = int(raw.get("index", 0) or 0)
                 function = raw.get("function") or {}
-                item = self._tool_items.get(index)
-                if item is None:
-                    item = {"id": "fc_" + secrets.token_hex(8), "type": "function_call",
-                            "status": "in_progress",
-                            "call_id": str(raw.get("id") or f"call_{secrets.token_hex(6)}"),
-                            "name": str(function.get("name") or ""), "arguments": ""}
-                    self._tool_items[index] = item
-                    events += self._open_item(item)
-                elif self._open is not item:
-                    continue
+                item = self._tool_items.setdefault(
+                    index, {"id": "fc_" + secrets.token_hex(8), "type": "function_call",
+                            "status": "in_progress", "call_id": "", "name": "", "arguments": ""})
+                if raw.get("id") and not item["call_id"]:
+                    item["call_id"] = str(raw["id"])
                 if function.get("name") and not item["name"]:
                     item["name"] = str(function["name"])
-                chunk = str(function.get("arguments") or "")
-                if chunk:
-                    item["arguments"] += chunk
-                    events.append(self._event("response.function_call_arguments.delta",
-                                              item_id=item["id"],
-                                              output_index=self.output.index(item), delta=chunk))
+                item["arguments"] += str(function.get("arguments") or "")
             if choice.get("finish_reason") == "content_filter":
                 raise ProxyError("upstream blocked the response by content filter.", 400)
         return events
 
     def finish(self) -> list[dict[str, Any]]:
         events = self._close_open()
-        for item in self.output:
-            if item["type"] == "function_call" and not item["arguments"]:
-                item["arguments"] = "{}"
+        for index in sorted(self._tool_items):
+            item = self._tool_items[index]
+            item["call_id"] = item["call_id"] or f"call_{secrets.token_hex(6)}"
+            item["arguments"] = item["arguments"] or "{}"
+            arguments, item["arguments"] = item["arguments"], ""
+            events += self._open_item(item)
+            item["arguments"] = arguments
+            events.append(self._event("response.function_call_arguments.delta", item_id=item["id"],
+                                      output_index=self.output.index(item), delta=arguments))
+            events += self._close_open()
+        self._tool_items = {}
         self.status = "completed"
         events.append(self._event("response.completed", response=self.response()))
         return events
@@ -1509,7 +1515,7 @@ class Metrics:
                         "tokens_out": int(s["tokens_out"]),
                         "tokens_cached": int(s["tokens_cached"]),
                         "tokens": int(s["tokens_in"] + s["tokens_out"]),
-                        "avg_ms": round(s["latency_total"] / s["requests"]),
+                        "avg_ms": round(s["latency_total"] / s["requests"]) if s["requests"] else None,
                         "last_ms": round(s["last_ms"]),
                     }
                     for name, s in self.models.items()
@@ -1841,18 +1847,26 @@ def load_config() -> dict[str, Any]:
         config["port"] = int(config["port"])
     except (TypeError, ValueError):
         config["port"] = DEFAULT_PORT
+    if not 1 <= config["port"] <= 65535:
+        config["port"] = DEFAULT_PORT
     if not isinstance(config.get("integrations"), list):
         config["integrations"] = []
     config["integrations"] = [str(i) for i in config["integrations"] if isinstance(i, str)]
-    env_access = os.environ.get("OCFREE_ACCESS")
-    if env_access in ACCESS_HOSTS:
-        config["access"] = env_access
-    if os.environ.get("OCFREE_PORT", "").isdigit():
-        config["port"] = int(os.environ["OCFREE_PORT"])
     return config
 
 
+def env_overrides() -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    if os.environ.get("OCFREE_ACCESS") in ACCESS_HOSTS:
+        overrides["access"] = os.environ["OCFREE_ACCESS"]
+    if os.environ.get("OCFREE_PORT", "").isdigit() and 1 <= int(os.environ["OCFREE_PORT"]) <= 65535:
+        overrides["port"] = int(os.environ["OCFREE_PORT"])
+    return overrides
+
+
 def save_config() -> None:
+    # CONFIG holds what the user set; environment overrides are applied at
+    # start only and never written to config.json.
     with CONFIG_LOCK:
         data = json.dumps(CONFIG, indent=2)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -1923,9 +1937,15 @@ def set_autostart(enabled: bool) -> None:
                 pass
 
 
+def _family(host: str) -> int:
+    return socket.AF_INET6 if ":" in host else socket.AF_INET
+
+
 def port_available(host: str, port: int) -> bool:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock = socket.socket(_family(host), socket.SOCK_STREAM)
     try:
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         sock.bind((host, port))
         return True
     except OSError:
@@ -2737,13 +2757,13 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
                 raise ProxyError(f"{flag} must be true or false.", 400)
         if "open_browser" in req:
             changes["open_browser"] = bool(req["open_browser"])
-        with CONFIG_LOCK:
-            CONFIG.update(changes)
         if "autostart" in req and req["autostart"] is not None:
             try:
                 set_autostart(bool(req["autostart"]))
             except OSError as exc:
                 raise ProxyError(f"could not change autostart: {exc}", 500) from exc
+        with CONFIG_LOCK:
+            CONFIG.update(changes)
         try:
             save_config()
         except OSError as exc:
@@ -2755,7 +2775,9 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         with CONFIG_LOCK:
             host = CLI_HOST or ACCESS_HOSTS[CONFIG["access"]]
             port = CLI_PORT or CONFIG["port"]
-        if (host, port) != (BOUND_HOST, BOUND_PORT) and not port_available(host, port):
+        # Only a new port can be taken by someone else; the current one is ours
+        # and is released before the new process binds it.
+        if port != BOUND_PORT and not port_available(host, port):
             raise ProxyError(f"port {port} is already used by another program. Pick another port.", 409)
         RESTART_REQUESTED = True
         self._send_json(200, {"ok": True, "restarting": True, "port": port})
@@ -2855,6 +2877,8 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             app = integrations.connect(integration_id, integration_target(), backups_dir())
         except integrations.IntegrationError as exc:
             raise ProxyError(str(exc), 409) from exc
+        except UnicodeDecodeError as exc:
+            raise ProxyError(f"the app config is not valid UTF-8: {exc}", 409) from exc
         except OSError as exc:
             raise ProxyError(f"could not write the app config: {exc}", 500) from exc
         self._set_enabled(integration_id, True)
@@ -2867,6 +2891,8 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             app = integrations.disconnect(integration_id, integration_target(), backups_dir())
         except integrations.IntegrationError as exc:
             raise ProxyError(str(exc), 409) from exc
+        except UnicodeDecodeError as exc:
+            raise ProxyError(f"the app config is not valid UTF-8: {exc}", 409) from exc
         except OSError as exc:
             raise ProxyError(f"could not write the app config: {exc}", 500) from exc
         self._set_enabled(integration_id, False)
@@ -3075,8 +3101,9 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
                     delta = choice.get("delta") or {}
                     if delta.get("content"):
                         line(piece("content", str(delta["content"])))
-                    if include_thinking and delta.get("reasoning_content"):
-                        line(piece("thinking", str(delta["reasoning_content"])))
+                    thought = delta.get("reasoning_content") or delta.get("reasoning")
+                    if include_thinking and thought:
+                        line(piece("thinking", str(thought)))
                     for raw_call in delta.get("tool_calls") or []:
                         index = int(raw_call.get("index", 0) or 0)
                         item = calls.setdefault(index, {"name": "", "arguments": ""})
@@ -3125,11 +3152,28 @@ def _probe_running(port: int) -> bool:
     return isinstance(data, dict) and data.get("ok") is True and "version" in data
 
 
+class AppHTTPServer(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second socket bind a port that is in use,
+    # so a busy port would not be detected. Use exclusive binding there instead.
+    allow_reuse_address = os.name != "nt"
+
+    def __init__(self, address: tuple[str, int], handler: Any) -> None:
+        self.address_family = _family(address[0])
+        super().__init__(address, handler)
+
+    def server_bind(self) -> None:
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        if self.address_family == socket.AF_INET6 and self.server_address[0] == "::":
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
+
+
 def _bind(host: str, port: int, wait: float) -> ThreadingHTTPServer:
     deadline = time.time() + wait
     while True:
         try:
-            return ThreadingHTTPServer((host, port), OpenAICompatibleHandler)
+            return AppHTTPServer((host, port), OpenAICompatibleHandler)
         except OSError:
             if time.time() >= deadline:
                 raise
@@ -3247,6 +3291,8 @@ def _main() -> None:
     parser.add_argument("--no-browser", action="store_true", help="do not open the dashboard on start")
     parser.add_argument("--background", action="store_true", help="start without a window (Windows)")
     args = parser.parse_args()
+    if args.port is not None and not 1 <= args.port <= 65535:
+        parser.error("--port must be between 1 and 65535")
 
     restarted = os.environ.pop("OCFREE_RESTARTED", "") == "1"
     windows_app = FROZEN and os.name == "nt"
@@ -3260,9 +3306,11 @@ def _main() -> None:
         open_log_file()
 
     CONFIG = load_config()
-    CLI_HOST, CLI_PORT = args.host, args.port
-    host = args.host or ACCESS_HOSTS[CONFIG["access"]]
-    port = args.port or CONFIG["port"]
+    env = env_overrides()
+    CLI_HOST = args.host or (ACCESS_HOSTS[env["access"]] if "access" in env else None)
+    CLI_PORT = args.port or env.get("port")
+    host = CLI_HOST or ACCESS_HOSTS[CONFIG["access"]]
+    port = CLI_PORT or CONFIG["port"]
     key = args.key or os.environ.get("OCFREE_API_KEY")
     if key:
         _write_key(key.strip())
