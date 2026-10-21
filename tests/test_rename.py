@@ -1,4 +1,4 @@
-"""Tests for v1.5.0: the rename to 7q9k route, the 7q9k-Agent app, and
+"""Tests for the rename to 7q9k route, the 7q9k-Agent app, and
 retrying upstream 5xx errors."""
 
 from __future__ import annotations
