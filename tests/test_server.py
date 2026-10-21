@@ -294,14 +294,18 @@ class PureFunctionTests(unittest.TestCase):
                                                      "input_cache_read": "0.00000001"}},
             {"id": "broken/model", "pricing": {"prompt": "x"}},
         ]}
+        fx = {"base": "USD", "date": "2026-10-20", "rates": {"EUR": 0.89}}
         with tempfile.TemporaryDirectory() as tmp, \
-                mock.patch.object(server, "_json_get", lambda url, timeout: payload):
+                mock.patch.object(server, "_json_get",
+                                  lambda url, timeout: fx if url == server.FX_URL else payload):
             p = server.Pricing(Path(tmp) / "pricing.json")
             self.assertTrue(p.refresh())
             self.assertEqual(set(p.prices), {"z-ai/glm-5.3-flash"})
             self.assertEqual(p.prices["z-ai/glm-5.3-flash"]["cache_read"], 1e-08)
+            self.assertEqual(p.info()["usd_eur"], 0.89)
             cached = server.Pricing(Path(tmp) / "pricing.json")
             self.assertEqual(cached.prices, p.prices)
+            self.assertEqual((cached.usd_eur, cached.fx_date), (0.89, "2026-10-20"))
         with mock.patch.object(server, "_json_get", side_effect=OSError("offline")):
             p = server.Pricing()
             self.assertFalse(p.refresh())

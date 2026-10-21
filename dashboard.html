@@ -544,13 +544,18 @@ const $$ = sel => [...document.querySelectorAll(sel)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = n => n == null ? '–' : n.toLocaleString('en-US');
 const fmtInt = n => n == null ? '–' : Math.round(n).toLocaleString('en-US');
-const fmtUsd = v => {
+// OpenRouter prices are in USD; show them in euros at the daily ECB rate when known.
+let usdEur = null;
+const money = v => usdEur ? v * usdEur : v;
+const sym = () => usdEur ? '€' : '$';
+const fmtMoney = v => {
   if (v == null) return '–';
-  if (v === 0) return '$0.00';
+  v = money(v);
+  if (v === 0) return sym() + '0.00';
   const digits = v < 0.0001 ? 6 : v < 0.01 ? 5 : v < 1 ? 4 : 2;
-  return '$' + v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:digits});
+  return sym() + v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:digits});
 };
-const fmtPerM = v => v == null ? '–' : '$' + v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:4});
+const fmtPerM = v => v == null ? '–' : sym() + money(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:4});
 const fmtClock = t => t ? new Date(t*1000).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : '';
 const fmtDate = t => t ? new Date(t*1000).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
 const fmtMs = ms => ms == null ? '–' : ms >= 1000 ? (ms/1000).toLocaleString('en-US',{maximumFractionDigits:1})+' s' : ms+' ms';
@@ -692,6 +697,7 @@ async function testModel(li){
 
 function renderStats(){
   const s=stats; if(!s) return;
+  usdEur = s.usage?.pricing?.usd_eur || null;
   $('kReq').textContent = fmtInt(s.requests);
   const rate = s.requests ? s.errors/s.requests*100 : 0;
   $('kReqHint').innerHTML = s.errors
@@ -699,8 +705,8 @@ function renderStats(){
     : 'no errors';
   $('kTok').textContent = fmtInt(s.tokens_in + s.tokens_out);
   $('kTokHint').textContent = `${fmtInt(s.tokens_in)} input · ${fmtInt(s.tokens_out)} output`;
-  $('kCost').textContent = fmtUsd(s.usage?.total_cost_usd ?? 0);
-  $('kCostHint').textContent = s.usage?.unpriced_tokens ? `excl. ${fmtInt(s.usage.unpriced_tokens)} tokens without a price` : 'you pay $0';
+  $('kCost').textContent = fmtMoney(s.usage?.total_cost_usd ?? 0);
+  $('kCostHint').textContent = s.usage?.unpriced_tokens ? `excl. ${fmtInt(s.usage.unpriced_tokens)} tokens without a price` : `you pay ${sym()}0`;
   $('kLat').textContent = fmtMs(s.avg_ms);
   const last=[...s.log].reverse().find(e=>e.model);
   $('kLatHint').textContent = last ? `last ${fmtMs(last.ms)}` : 'no requests yet';
@@ -718,12 +724,13 @@ function renderUsage(){
       ? `${p.similar ? 'closest match ' : ''}${esc(p.openrouter_id)} · ${fmtPerM(p.prompt_per_m)} input / ${fmtPerM(p.completion_per_m)} output per 1M tokens`
       : 'no matching model on OpenRouter, so no price';
     const cached = r.tokens_cached ? ` <span class="p">(${fmtInt(r.tokens_cached)} cached)</span>` : '';
-    return `<tr class="${r.requests?'':'idle'}"><td><div class="m">${esc(r.model)}</div><div class="p">${priceLine}</div></td><td class="r" data-l="Requests">${fmtInt(r.requests)}</td><td class="r" data-l="Input">${fmtInt(r.tokens_in)}${cached}</td><td class="r" data-l="Output">${fmtInt(r.tokens_out)}</td><td class="r" data-l="Cost">${r.cost_usd==null?'–':fmtUsd(r.cost_usd)}</td></tr>`;
+    return `<tr class="${r.requests?'':'idle'}"><td><div class="m">${esc(r.model)}</div><div class="p">${priceLine}</div></td><td class="r" data-l="Requests">${fmtInt(r.requests)}</td><td class="r" data-l="Input">${fmtInt(r.tokens_in)}${cached}</td><td class="r" data-l="Output">${fmtInt(r.tokens_out)}</td><td class="r" data-l="Cost">${r.cost_usd==null?'–':fmtMoney(r.cost_usd)}</td></tr>`;
   }).join('');
   const sum=k=>u.rows.reduce((a,r)=>a+r[k],0);
-  $('usageTotal').innerHTML = `<tr><td>Total</td><td class="r" data-l="Requests">${fmtInt(sum('requests'))}</td><td class="r" data-l="Input">${fmtInt(sum('tokens_in'))}</td><td class="r" data-l="Output">${fmtInt(sum('tokens_out'))}</td><td class="r" data-l="Cost">${fmtUsd(u.total_cost_usd)}</td></tr>`;
+  $('usageTotal').innerHTML = `<tr><td>Total</td><td class="r" data-l="Requests">${fmtInt(sum('requests'))}</td><td class="r" data-l="Input">${fmtInt(sum('tokens_in'))}</td><td class="r" data-l="Output">${fmtInt(sum('tokens_out'))}</td><td class="r" data-l="Cost">${fmtMoney(u.total_cost_usd)}</td></tr>`;
   const pi=u.pricing||{};
   $('priceNote').textContent = (pi.fetched ? `Live prices from OpenRouter, ${fmtDate(pi.fetched)}. ` : 'Loading OpenRouter prices. ')
+    + (pi.usd_eur ? `Shown in euros at the ECB rate of ${pi.fx_date || 'today'} (1 USD = ${pi.usd_eur.toLocaleString('en-US',{maximumFractionDigits:4})} EUR). ` : '')
     + 'This is what the same tokens would cost on OpenRouter. Models without an exact match use the closest paid model of the same family. OpenCode charges nothing.'
     + (pi.error ? ` Last fetch failed: ${pi.error}` : '');
 }
@@ -814,7 +821,7 @@ function renderModelCharts(){
     {v:r.tokens_in, c:'var(--c-in)', t:`${fmtInt(r.tokens_in)} input tokens`},
     {v:r.tokens_out, c:'var(--c-out)', t:`${fmtInt(r.tokens_out)} output tokens`}]})), 'No tokens yet.');
   const priced = used.filter(r => r.cost_usd).sort((a,b)=>b.cost_usd-a.cost_usd);
-  hbars($('costChart'), priced.map(r => ({ name:r.model, label:fmtUsd(r.cost_usd), parts:[{v:r.cost_usd, c:'var(--c-out)', t:fmtUsd(r.cost_usd)}]})), 'No priced usage yet.');
+  hbars($('costChart'), priced.map(r => ({ name:r.model, label:fmtMoney(r.cost_usd), parts:[{v:r.cost_usd, c:'var(--c-out)', t:fmtMoney(r.cost_usd)}]})), 'No priced usage yet.');
   const lat = Object.entries(stats.models||{}).filter(([,s])=>s.requests).sort((a,b)=>a[1].avg_ms-b[1].avg_ms);
   hbars($('latChart'), lat.map(([name,s]) => ({ name, label:fmtMs(s.avg_ms), parts:[{v:s.avg_ms, c:'var(--c-out)', t:`${fmtMs(s.avg_ms)} over ${s.requests} requests`}]})), 'Test a model or send a message to see response times.');
 }
@@ -822,7 +829,7 @@ function renderModelCharts(){
 function logRow(e){
   const bad = e.status>=400 || e.error;
   const tok=(e.tokens_in||0)+(e.tokens_out||0);
-  const sub=[e.model, tok?`${fmtInt(e.tokens_in||0)} in · ${fmtInt(e.tokens_out||0)} out`:'', tok&&e.cost_usd!=null?fmtUsd(e.cost_usd):'', e.client!=='local'?e.client:''].filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join('');
+  const sub=[e.model, tok?`${fmtInt(e.tokens_in||0)} in · ${fmtInt(e.tokens_out||0)} out`:'', tok&&e.cost_usd!=null?fmtMoney(e.cost_usd):'', e.client!=='local'?e.client:''].filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join('');
   return `<li><span class="t">${esc(e.t)}</span><div style="min-width:0"><div class="l-title">${esc(e.method)} ${esc(e.path)}</div>${sub||e.error?`<div class="l-sub">${sub}${e.error?`<span class="errline" title="${esc(e.error)}">${esc(e.error.slice(0,140))}</span>`:''}</div>`:''}</div><span class="code ${bad?'bad':''}">${e.status||'—'} · ${fmtMs(e.ms)}</span></li>`;
 }
 function renderLog(){

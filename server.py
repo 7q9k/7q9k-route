@@ -1659,6 +1659,8 @@ class Metrics:
 
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+# Daily ECB reference rate, used to show the OpenRouter value in euros.
+FX_URL = "https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR"
 PRICING_TTL = 6 * 3600
 
 
@@ -1670,6 +1672,8 @@ class Pricing:
         self.fetched = 0.0
         self.prices: dict[str, dict[str, float]] = {}
         self.error: str | None = None
+        self.usd_eur: float | None = None
+        self.fx_date: str | None = None
         self._refreshing = False
         self._last_attempt = 0.0
         # model -> (OpenRouter id, exact match?)
@@ -1682,8 +1686,24 @@ class Pricing:
             data = json.loads(self.path.read_text(encoding="utf-8"))
             self.fetched = float(data["fetched"])
             self.prices = {str(k): dict(v) for k, v in data["prices"].items()}
+            if data.get("usd_eur"):
+                self.usd_eur = float(data["usd_eur"])
+                self.fx_date = data.get("fx_date")
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             pass
+
+    def _refresh_rate(self, timeout: float) -> None:
+        """Fetch USD -> EUR. A failure keeps the last known rate."""
+        try:
+            data = _json_get(FX_URL, timeout)
+            rate = float(data["rates"]["EUR"])
+            if rate <= 0:
+                raise ValueError("bad rate")
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return
+        with self.lock:
+            self.usd_eur = rate
+            self.fx_date = str(data.get("date") or "") or None
 
     @staticmethod
     def _price(value: Any) -> float | None:
@@ -1694,6 +1714,7 @@ class Pricing:
         return price if price >= 0 else None
 
     def refresh(self, timeout: float = 20.0) -> bool:
+        self._refresh_rate(timeout)
         try:
             data = _json_get(OPENROUTER_MODELS_URL, timeout)
             prices: dict[str, dict[str, float]] = {}
@@ -1723,7 +1744,11 @@ class Pricing:
         if self.path is not None:
             try:
                 self.path.write_text(
-                    json.dumps({"fetched": self.fetched, "prices": prices}), encoding="utf-8"
+                    json.dumps({
+                        "fetched": self.fetched, "prices": prices,
+                        "usd_eur": self.usd_eur, "fx_date": self.fx_date,
+                    }),
+                    encoding="utf-8",
                 )
             except OSError:
                 pass
@@ -1734,7 +1759,9 @@ class Pricing:
         with self.lock:
             if self._refreshing:
                 return
-            if not force and (now - self.fetched < PRICING_TTL or now - self._last_attempt < 300):
+            # A missing euro rate (older pricing.json) is fetched without waiting for the TTL.
+            fresh = now - self.fetched < PRICING_TTL and self.usd_eur is not None
+            if not force and (fresh or now - self._last_attempt < 300):
                 return
             self._refreshing = True
             self._last_attempt = now
@@ -1812,6 +1839,8 @@ class Pricing:
                 "fetched": self.fetched or None,
                 "error": self.error,
                 "models": len(self.prices),
+                "usd_eur": self.usd_eur,
+                "fx_date": self.fx_date,
             }
 
 
