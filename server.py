@@ -28,7 +28,7 @@ from typing import Any, Iterator
 
 import integrations
 
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.5.0"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -36,10 +36,10 @@ RES_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))
 DASHBOARD_FILE = RES_DIR / "dashboard.html"
 ASSETS_DIR = RES_DIR / "assets"
 def default_data_dir() -> Path:
-    if os.environ.get("OCFREE_DATA_DIR"):
-        return Path(os.environ["OCFREE_DATA_DIR"])
+    if os.environ.get("ROUTE7Q9K_DATA_DIR"):
+        return Path(os.environ["ROUTE7Q9K_DATA_DIR"])
     if FROZEN and os.name == "nt":
-        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "oc-free-api"
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "7q9k-route"
     return BASE_DIR
 
 
@@ -96,6 +96,8 @@ _ID_COUNTER = 0
 
 class ProxyError(Exception):
     status_code: int = 502
+    # Set for upstream failures worth retrying (5xx, connection errors).
+    retryable: bool = False
 
     def __init__(self, message: str, status_code: int = 502):
         super().__init__(message)
@@ -267,8 +269,32 @@ def _sse_lines_to_payloads(response: Any) -> Iterator[dict[str, Any]]:
             pass
 
 
+# OpenCode answers HTTP 5xx ("Endpoint is unavailable") while a free model's
+# backend briefly drops out; it usually works again within a few seconds.
+# Retried before anything is streamed to the client, so no output repeats.
+# Rate limits (429) are never retried.
+UPSTREAM_RETRY_DELAYS = (0.5, 1.0, 2.0, 4.0)
+RETRYABLE_UPSTREAM_STATUS = frozenset({500, 502, 503, 504})
+
+
 def upstream_stream(
     url: str, body: dict[str, Any], timeout: float = UPSTREAM_TIMEOUT
+) -> Iterator[dict[str, Any]]:
+    delays = iter(UPSTREAM_RETRY_DELAYS)
+    while True:
+        try:
+            return _upstream_stream_once(url, body, timeout)
+        except ProxyError as exc:
+            delay = next(delays, None) if getattr(exc, "retryable", False) else None
+            if delay is None:
+                raise
+            _emit(_paint("[7q9k route] ", "dim")
+                  + f"{body.get('model', '?')}: {str(exc)[:160]} - retrying in {delay:g}s", sys.stderr)
+            time.sleep(delay)
+
+
+def _upstream_stream_once(
+    url: str, body: dict[str, Any], timeout: float
 ) -> Iterator[dict[str, Any]]:
     session = _session_id()
     ua = OPENCODE_UA_RESPONSES if "responses" in url else OPENCODE_UA_CHAT
@@ -296,9 +322,13 @@ def upstream_stream(
         except Exception:
             detail = ""
         status = exc.code if 400 <= exc.code < 500 else 502
-        raise ProxyError(f"upstream rejected request (HTTP {exc.code}): {detail}", status) from exc
+        error = ProxyError(f"upstream rejected request (HTTP {exc.code}): {detail}", status)
+        error.retryable = exc.code in RETRYABLE_UPSTREAM_STATUS
+        raise error from exc
     except urllib.error.URLError as exc:
-        raise ProxyError(f"upstream connection failed: {exc.reason}") from exc
+        error = ProxyError(f"upstream connection failed: {exc.reason}")
+        error.retryable = True
+        raise error from exc
     except TimeoutError as exc:
         raise ProxyError("upstream timed out.", 504) from exc
     except (OSError, http.client.HTTPException) as exc:
@@ -1206,7 +1236,7 @@ def _ollama_model_entries() -> list[dict[str, Any]]:
             "model": model,
             "modified_at": _ollama_now(),
             "size": 0,
-            "digest": "oc-free-" + model,
+            "digest": "7q9k-route-" + model,
             "details": _ollama_details(),
             "capabilities": ["completion", "streaming", "tools"],
         }
@@ -1857,10 +1887,10 @@ def load_config() -> dict[str, Any]:
 
 def env_overrides() -> dict[str, Any]:
     overrides: dict[str, Any] = {}
-    if os.environ.get("OCFREE_ACCESS") in ACCESS_HOSTS:
-        overrides["access"] = os.environ["OCFREE_ACCESS"]
-    if os.environ.get("OCFREE_PORT", "").isdigit() and 1 <= int(os.environ["OCFREE_PORT"]) <= 65535:
-        overrides["port"] = int(os.environ["OCFREE_PORT"])
+    if os.environ.get("ROUTE7Q9K_ACCESS") in ACCESS_HOSTS:
+        overrides["access"] = os.environ["ROUTE7Q9K_ACCESS"]
+    if os.environ.get("ROUTE7Q9K_PORT", "").isdigit() and 1 <= int(os.environ["ROUTE7Q9K_PORT"]) <= 65535:
+        overrides["port"] = int(os.environ["ROUTE7Q9K_PORT"])
     return overrides
 
 
@@ -1876,7 +1906,9 @@ def save_config() -> None:
 
 
 AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-AUTOSTART_NAME = "oc-free-api"
+AUTOSTART_NAME = "7q9k-route"
+# Name used before the rename to 7q9k route; replaced on start.
+LEGACY_AUTOSTART_NAME = "oc-free-api"
 
 
 def autostart_supported() -> bool:
@@ -1900,10 +1932,27 @@ def _autostart_value() -> str | None:
         return None
 
 
+def _take_legacy_autostart() -> bool:
+    """Removes the pre-rename `oc-free-api` entry; returns whether it existed."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY, 0,
+                            winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as key:
+            winreg.QueryValueEx(key, LEGACY_AUTOSTART_NAME)
+            winreg.DeleteValue(key, LEGACY_AUTOSTART_NAME)
+            return True
+    except OSError:
+        return False
+
+
 def refresh_autostart() -> None:
     if not autostart_supported():
         return
     try:
+        # Keep "start with Windows" on across the rename to 7q9k route.
+        if _take_legacy_autostart():
+            set_autostart(True)
+            return
         value = _autostart_value()
         if value is not None and value != autostart_command():
             set_autostart(True)
@@ -2018,7 +2067,7 @@ def _write_key(key: str) -> str:
 
 
 def regenerate_api_key() -> str:
-    return _write_key("sk-oc-free-" + secrets.token_hex(20))
+    return _write_key("sk-7q9k-" + secrets.token_hex(20))
 
 
 KEY_PATTERN = re.compile(r"^[A-Za-z0-9._~+/=-]{8,200}$")
@@ -2044,9 +2093,9 @@ def sync_integrations() -> list[str]:
         enabled = list(CONFIG.get("integrations") or [])
     if not enabled:
         return []
-    updated = integrations.sync(enabled, integration_target(), backups_dir(), log=lambda m: _emit(f"[oc-free-api] {m}"))
+    updated = integrations.sync(enabled, integration_target(), backups_dir(), log=lambda m: _emit(f"[7q9k route] {m}"))
     for item in updated:
-        _emit(f"[oc-free-api] updated {integrations.get(item).name}")
+        _emit(f"[7q9k route] updated {integrations.get(item).name}")
     return updated
 
 
@@ -2063,7 +2112,7 @@ def _enable_windows_vt(port: int) -> bool:
         return sys.stderr.isatty()
     try:
         kernel32 = ctypes.windll.kernel32
-        kernel32.SetConsoleTitleW(f"oc-free-api - Port {port}")
+        kernel32.SetConsoleTitleW(f"7q9k route - Port {port}")
         for handle_id in (-11, -12):
             handle = kernel32.GetStdHandle(handle_id)
             mode = ctypes.c_uint32()
@@ -2182,7 +2231,7 @@ def _windows_console_open() -> bool:
         kernel32 = ctypes.windll.kernel32
         if not kernel32.AllocConsole():
             return False
-        kernel32.SetConsoleTitleW("oc-free-api")
+        kernel32.SetConsoleTitleW("7q9k route")
         _set_console_icon()
         global CONSOLE_OUT
         CONSOLE_OUT = open("CONOUT$", "w", encoding="utf-8", buffering=1)
@@ -2227,7 +2276,7 @@ def _print_banner(port: int, host: str, key: str, models: list[str]) -> None:
     shown_models = ", ".join(models[:5]) + (" …" if len(models) > 5 else "")
     _emit("")
     _emit(
-        _paint("oc-free-api", "bright")
+        _paint("7q9k route", "bright")
         + "   "
         + _paint(f"v{APP_VERSION} · OpenCode free models · OpenAI-compatible", "dim")
     )
@@ -2325,7 +2374,7 @@ CLIENT_GONE = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 
 class OpenAICompatibleHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = f"oc-free-api/{APP_VERSION}"
+    server_version = f"7q9k-route/{APP_VERSION}"
     timeout = 300
 
     api_key: str = ""
@@ -2382,7 +2431,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
                 self._send_json(code, {"error": message})
             else:
                 self._send_json(
-                    code, {"error": {"message": message, "type": "oc_free_api_error", "code": code}}
+                    code, {"error": {"message": message, "type": "route_error", "code": code}}
                 )
         except CLIENT_GONE:
             self.close_connection = True
@@ -2468,7 +2517,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             line += _paint(f"  [{entry['client']}]", "magenta")
         if entry.get("error"):
             line += "  " + _paint(entry["error"][:120], "red")
-        _emit(_paint("[oc-free-api] ", "dim") + line, sys.stderr)
+        _emit(_paint("[7q9k route] ", "dim") + line, sys.stderr)
 
 
     def _via_proxy(self) -> bool:
@@ -2698,7 +2747,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         )
 
     def _get_version(self) -> None:
-        self._send_json(200, {"version": f"oc-free-api/{APP_VERSION}"})
+        self._send_json(200, {"version": f"7q9k-route/{APP_VERSION}"})
 
     def _get_props(self) -> None:
         models = available_models()
@@ -2958,7 +3007,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             self._meta["error"] = str(exc)
             try:
                 self._chunk(
-                    sse({"error": {"message": str(exc), "type": "oc_free_api_error", "code": code}})
+                    sse({"error": {"message": str(exc), "type": "route_error", "code": code}})
                 )
             except OSError:
                 pass
@@ -3183,7 +3232,7 @@ def _bind(host: str, port: int, wait: float) -> ThreadingHTTPServer:
 def _print_window_banner(port: int) -> None:
     urls = public_urls(port)
     _emit("")
-    _emit("  oc-free-api is running")
+    _emit("  7q9k route is running")
     _emit("")
     _emit(f"  Dashboard        http://localhost:{port}")
     _emit(f"  Base URL         {urls['local']}/v1")
@@ -3197,7 +3246,7 @@ def _print_window_banner(port: int) -> None:
 
 def _restart_process() -> None:
     env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k != "_MEIPASS2"}
-    env["OCFREE_RESTARTED"] = "1"
+    env["ROUTE7Q9K_RESTARTED"] = "1"
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     argv = [sys.executable] + (sys.argv[1:] if FROZEN else sys.argv)
     if os.name == "nt":
@@ -3248,10 +3297,28 @@ def migrate_legacy_files(source: Path, target: Path) -> list[str]:
     return moved
 
 
+def legacy_data_dir() -> Path:
+    """Data folder used before the rename from oc-free-api."""
+    return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "oc-free-api"
+
+
+def migrate_legacy_data_dir(source: Path, target: Path) -> list[str]:
+    """Moves key, stats, settings and app backups from the old data folder."""
+    moved = migrate_legacy_files(source, target)
+    old_backups, new_backups = source / "backups", target / "backups"
+    if old_backups.is_dir() and not new_backups.exists():
+        try:
+            shutil.move(str(old_backups), str(new_backups))
+            moved.append("backups")
+        except OSError:
+            pass
+    return moved
+
+
 def _ensure_data_dir() -> None:
     if _writable(DATA_DIR):
         return
-    fallback = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "oc-free-api"
+    fallback = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "7q9k-route"
     _use_data_dir(fallback)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -3264,7 +3331,7 @@ def main() -> None:
     except Exception:
         details = traceback.format_exc()
         _emit("")
-        _emit("  oc-free-api could not start:")
+        _emit("  7q9k route could not start:")
         _emit("  " + details.strip().splitlines()[-1])
         try:
             with open(LOG_FILE, "a", encoding="utf-8") as log:
@@ -3294,14 +3361,15 @@ def _main() -> None:
     if args.port is not None and not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
 
-    restarted = os.environ.pop("OCFREE_RESTARTED", "") == "1"
+    restarted = os.environ.pop("ROUTE7Q9K_RESTARTED", "") == "1"
     windows_app = FROZEN and os.name == "nt"
     show_window = windows_app and not args.background and not restarted
     if show_window and not _windows_console_open():
         show_window = False
     _ensure_data_dir()
-    if FROZEN and not os.environ.get("OCFREE_DATA_DIR"):
+    if FROZEN and not os.environ.get("ROUTE7Q9K_DATA_DIR"):
         migrate_legacy_files(BASE_DIR, DATA_DIR)
+        migrate_legacy_data_dir(legacy_data_dir(), DATA_DIR)
     if not show_window and (sys.stdout is None or (os.name == "nt" and (restarted or args.background))):
         open_log_file()
 
@@ -3311,7 +3379,7 @@ def _main() -> None:
     CLI_PORT = args.port or env.get("port")
     host = CLI_HOST or ACCESS_HOSTS[CONFIG["access"]]
     port = CLI_PORT or CONFIG["port"]
-    key = args.key or os.environ.get("OCFREE_API_KEY")
+    key = args.key or os.environ.get("ROUTE7Q9K_API_KEY")
     if key:
         _write_key(key.strip())
     open_browser = (
@@ -3322,7 +3390,7 @@ def _main() -> None:
 
     if not restarted and _probe_running(port):
         _emit("")
-        _emit("  oc-free-api is already running.")
+        _emit("  7q9k route is already running.")
         _emit(f"  Dashboard  {dashboard_url}")
         _emit("")
         if open_browser:

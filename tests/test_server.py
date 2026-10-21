@@ -302,7 +302,7 @@ class PureFunctionTests(unittest.TestCase):
             config = server.load_config()
             self.assertEqual((config["access"], config["port"]), ("network", 8787))
             self.assertNotIn("extra", config)
-            with mock.patch.dict(server.os.environ, {"OCFREE_ACCESS": "local", "OCFREE_PORT": "9001"}):
+            with mock.patch.dict(server.os.environ, {"ROUTE7Q9K_ACCESS": "local", "ROUTE7Q9K_PORT": "9001"}):
                 config = server.load_config()
                 overrides = server.env_overrides()
             self.assertEqual((config["access"], config["port"]), ("network", 8787))
@@ -393,7 +393,7 @@ class ServerTests(unittest.TestCase):
         status, body = self.request("GET", "/")
         self.assertEqual(status, 200)
         text = body.decode("utf-8")
-        self.assertIn("oc-free-api", text)
+        self.assertIn("7q9k route", text)
         self.assertNotRegex(text, "[┬╖ΓÇ]")
 
     def test_assets_served_without_path_escape(self):

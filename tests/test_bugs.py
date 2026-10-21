@@ -142,7 +142,7 @@ class StateTests(unittest.TestCase):
             with mock.patch.object(server, "_writable", return_value=False), \
                     mock.patch.dict(server.os.environ, {"LOCALAPPDATA": tmp}):
                 server._ensure_data_dir()
-            self.assertEqual(server.DATA_DIR, (Path(tmp) / "oc-free-api").resolve())
+            self.assertEqual(server.DATA_DIR, (Path(tmp) / "7q9k-route").resolve())
             self.assertEqual(server.KEY_FILE.parent, server.DATA_DIR)
 
     def test_exe_data_lives_in_local_appdata(self):
@@ -150,14 +150,14 @@ class StateTests(unittest.TestCase):
                 mock.patch.object(server, "FROZEN", True), \
                 mock.patch.object(server.os, "name", "nt"), \
                 mock.patch.dict(server.os.environ, {"LOCALAPPDATA": tmp}, clear=False):
-            server.os.environ.pop("OCFREE_DATA_DIR", None)
-            self.assertEqual(server.default_data_dir(), Path(tmp) / "oc-free-api")
-        with mock.patch.dict(server.os.environ, {"OCFREE_DATA_DIR": "X:/custom"}):
+            server.os.environ.pop("ROUTE7Q9K_DATA_DIR", None)
+            self.assertEqual(server.default_data_dir(), Path(tmp) / "7q9k-route")
+        with mock.patch.dict(server.os.environ, {"ROUTE7Q9K_DATA_DIR": "X:/custom"}):
             self.assertEqual(server.default_data_dir(), Path("X:/custom"))
 
     def test_legacy_files_are_moved_once(self):
         with tempfile.TemporaryDirectory() as tmp:
-            old, new = Path(tmp) / "Downloads", Path(tmp) / "AppData" / "oc-free-api"
+            old, new = Path(tmp) / "Downloads", Path(tmp) / "AppData" / "7q9k-route"
             old.mkdir()
             (old / "api-key.txt").write_text("sk-old", encoding="utf-8")
             (old / "stats.json").write_text("{}", encoding="utf-8")
@@ -352,7 +352,7 @@ class FixRegressionTests(unittest.TestCase):
             self.assertEqual(server.load_config()["port"], 8787)
 
     def test_env_overrides_not_saved(self):
-        with tempfile.TemporaryDirectory() as tmp,                 mock.patch.object(server, "CONFIG_FILE", Path(tmp) / "c.json"),                 mock.patch.object(server, "DATA_DIR", Path(tmp)),                 mock.patch.dict(server.os.environ, {"OCFREE_PORT": "9999"}),                 mock.patch.object(server, "CONFIG", server.load_config()):
+        with tempfile.TemporaryDirectory() as tmp,                 mock.patch.object(server, "CONFIG_FILE", Path(tmp) / "c.json"),                 mock.patch.object(server, "DATA_DIR", Path(tmp)),                 mock.patch.dict(server.os.environ, {"ROUTE7Q9K_PORT": "9999"}),                 mock.patch.object(server, "CONFIG", server.load_config()):
             server.save_config()
             self.assertEqual(json.loads(server.CONFIG_FILE.read_text(encoding="utf-8"))["port"], 8787)
 

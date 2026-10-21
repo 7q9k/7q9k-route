@@ -23,7 +23,7 @@ DSH_PATCH = """# Your patch layer for this dsh profile
 - id: agent-default-model
   name: "@deepseek-ai/dsh-agent-default-model"
   config:
-    provider: oc-free
+    provider: 7q9k-route
     model: deepseek-v4.1-flash-free
 """
 
@@ -86,12 +86,12 @@ class DeepSeekTests(Base):
         raw = self.path.read_bytes()
         self.assertIn(b"\r\n", raw)
         text = raw.decode("utf-8")
-        self.assertIn("    providers:\r\n      oc-free: {", text)
+        self.assertIn("    providers:\r\n      7q9k-route: {", text)
         self.assertIn("model: deepseek-v4.1-flash-free", text)
         self.assertEqual(self.app.status(target()), "connected")
         self.assertEqual(self.app.status(target(key="sk-other")), "outdated")
         self.app.connect(target(key="sk-other"), self.backups)
-        self.assertEqual(self.path.read_text(encoding="utf-8").count("oc-free: {"), 1)
+        self.assertEqual(self.path.read_text(encoding="utf-8").count("7q9k-route: {"), 1)
         self.assertEqual(self.app.status(target(key="sk-other")), "connected")
         self.app.disconnect(self.backups)
         self.assertEqual(self.path.read_bytes().decode("utf-8").replace("\r\n", "\n"), DSH_PATCH)
@@ -111,7 +111,7 @@ class DeepSeekTests(Base):
         self.path.write_text("- id: ui-chat\n  config:\n    a: 1\n", encoding="utf-8")
         self.app.connect(target(), self.backups)
         result = self.path.read_text(encoding="utf-8")
-        self.assertIn("- id: llm-pi-ai\n  name: \"@deepseek-ai/dsh-llm-pi-ai\"\n  config:\n    providers:\n      oc-free: {", result)
+        self.assertIn("- id: llm-pi-ai\n  name: \"@deepseek-ai/dsh-llm-pi-ai\"\n  config:\n    providers:\n      7q9k-route: {", result)
         self.assertTrue(result.startswith("- id: ui-chat\n  config:\n    a: 1\n"))
 
     def test_refuses_unknown_flow_form(self):
@@ -131,19 +131,19 @@ class HermesTests(Base):
     def test_connect_keeps_manual_entry(self):
         self.app.connect(target(), self.backups)
         text = self.path.read_text(encoding="utf-8")
-        self.assertIn('custom_providers:\n  - {"name": "oc-free-api"', text)
+        self.assertIn('custom_providers:\n  - {"name": "7q9k route"', text)
         self.assertIn("  - name: 192.168.0.29:8787\n    base_url: http://192.168.0.29:8787/v1\n", text)
         self.assertIn("other_section:\n  value: 1\n", text)
         self.assertEqual(self.app.status(target()), "connected")
         self.app.connect(target(key="k2-updated"), self.backups)
-        self.assertEqual(self.path.read_text(encoding="utf-8").count('"name": "oc-free-api"'), 1)
+        self.assertEqual(self.path.read_text(encoding="utf-8").count('"name": "7q9k route"'), 1)
         self.app.disconnect(self.backups)
         self.assertEqual(self.path.read_text(encoding="utf-8"), HERMES_CONFIG)
 
     def test_recognises_entry_rewritten_by_hermes(self):
         t = target()
         block = (
-            "custom_providers:\n  - name: oc-free-api\n    base_url: http://127.0.0.1:8787/v1\n"
+            "custom_providers:\n  - name: 7q9k route\n    base_url: http://127.0.0.1:8787/v1\n"
             f"    api_key: {t.api_key}\n    model: big-pickle\n    models:\n      big-pickle: {{}}\n"
             "      glm-5.3-flash-free: {}\n"
         )
@@ -152,13 +152,13 @@ class HermesTests(Base):
         self.assertEqual(self.app.status(target(port=9000)), "outdated")
         self.app.connect(target(port=9000), self.backups)
         text = self.path.read_text(encoding="utf-8")
-        self.assertNotIn("  - name: oc-free-api\n", text)
+        self.assertNotIn("  - name: 7q9k route\n", text)
         self.assertIn("  - name: 192.168.0.29:8787\n", text)
 
     def test_creates_section_and_empty_list(self):
         self.path.write_text("model:\n  default: x\n", encoding="utf-8")
         self.app.connect(target(), self.backups)
-        self.assertIn('\ncustom_providers:\n  - {"name": "oc-free-api"', self.path.read_text(encoding="utf-8"))
+        self.assertIn('\ncustom_providers:\n  - {"name": "7q9k route"', self.path.read_text(encoding="utf-8"))
         self.path.write_text("custom_providers: []\nlater: 1\n", encoding="utf-8")
         self.app.connect(target(), self.backups)
         self.assertEqual(self.app.status(target()), "connected")
@@ -172,11 +172,11 @@ class HermesTests(Base):
         self.app.connect(target(), self.backups)
         lines = self.path.read_text(encoding="utf-8").splitlines()
         self.assertEqual(lines[0], "custom_providers:")
-        self.assertTrue(lines[1].startswith('- {"name": "oc-free-api"'), lines)
+        self.assertTrue(lines[1].startswith('- {"name": "7q9k route"'), lines)
         self.assertEqual(lines[2:], ["- name: other", "  base_url: http://x", "model: foo"])
         self.assertEqual(self.app.status(target()), "connected")
         self.app.connect(target(key="other-key-1"), self.backups)
-        self.assertEqual(self.path.read_text(encoding="utf-8").count("oc-free-api"), 1)
+        self.assertEqual(self.path.read_text(encoding="utf-8").count("7q9k route"), 1)
         self.app.disconnect(self.backups)
         self.assertEqual(self.path.read_text(encoding="utf-8"), original)
 

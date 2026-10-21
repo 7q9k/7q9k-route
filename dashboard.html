@@ -1,11 +1,11 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>oc-free-api</title>
+<title>7q9k route</title>
 <link rel="icon" href="/assets/icon.png" type="image/png">
-<script>try{ const t=localStorage.getItem('ocfree.theme'); if(t) document.documentElement.dataset.theme=t; }catch{}</script>
+<script>try{ const t=(localStorage.getItem('7q9k-route.theme')||localStorage.getItem('ocfree.theme')); if(t) document.documentElement.dataset.theme=t; }catch{}</script>
 <style>
   @font-face{ font-family:'Geist'; src:url('/assets/fonts/geist.woff2') format('woff2'); font-weight:100 900; font-display:swap; }
   @font-face{ font-family:'Geist Mono'; src:url('/assets/fonts/geist-mono.woff2') format('woff2'); font-weight:100 900; font-display:swap; }
@@ -16,12 +16,12 @@
     --mono:'Geist Mono',ui-monospace,'Cascadia Code',Consolas,monospace;
     --ease:cubic-bezier(.16,1,.3,1);
     --bg:#f6f6f5; --field:#ffffff; --line:#e6e6e4; --line-2:#d4d4d1;
-    --text:#111112; --text-2:#45464a; --muted:#8a8b90; --bad:#c2261d; --signal:#15803d;
+    --text:#111112; --text-2:#45464a; --muted:#8a8b90; --bad:#c2261d; --signal:#15803d; --accent:#6a38e6;
     color-scheme:light;
   }
   :root[data-theme='dark']{
     --bg:#0b0b0c; --field:#141416; --line:#222225; --line-2:#313135;
-    --text:#ededee; --text-2:#b7b8bd; --muted:#75767c; --bad:#f87171; --signal:#4ade80;
+    --text:#ededee; --text-2:#b7b8bd; --muted:#75767c; --bad:#f87171; --signal:#4ade80; --accent:#9b6bff;
     color-scheme:dark;
   }
   :root{ --c-in:color-mix(in srgb,var(--text) 34%,var(--bg)); --c-out:color-mix(in srgb,var(--text) 78%,var(--bg)); }
@@ -33,13 +33,14 @@
   body{ min-height:100dvh; color:var(--text); font:15px/1.55 var(--sans); -webkit-font-smoothing:antialiased; }
   button,input,select,textarea{ font:inherit; color:inherit; }
   button{ cursor:pointer; }
-  :focus-visible{ outline:2px solid var(--signal); outline-offset:2px; border-radius:6px; }
+  :focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:6px; }
   .mono{ font-family:var(--mono); }
   .num{ font-variant-numeric:tabular-nums; }
 
   .top{ height:72px; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:0 clamp(16px,4vw,40px); }
-  .brand{ font-weight:650; font-size:17px; letter-spacing:-.03em; white-space:nowrap; }
-  .brand span{ color:var(--signal); }
+  .brand{ display:flex; align-items:center; gap:10px; font-weight:650; font-size:17px; letter-spacing:-.03em; white-space:nowrap; }
+  .brand img{ width:26px; height:26px; display:block; }
+  .brand span{ color:var(--accent); }
   .top-right{ display:flex; align-items:center; gap:18px; font-size:13px; color:var(--muted); }
   .state b{ font-weight:550; color:var(--signal); }
   .state.down b{ color:var(--bad); }
@@ -126,7 +127,7 @@
   .answer .text{ margin-top:10px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:15px; line-height:1.6; }
   .answer .err{ margin-top:10px; color:var(--bad); font-size:14px; }
   .bar{ height:2px; margin-top:12px; overflow:hidden; border-radius:2px; background:var(--line); }
-  .bar i{ display:block; width:30%; height:100%; background:var(--signal); animation:indet 1.2s var(--ease) infinite; }
+  .bar i{ display:block; width:30%; height:100%; background:var(--accent); animation:indet 1.2s var(--ease) infinite; }
 
   .list{ margin:0; padding:0; list-style:none; }
   .list li{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:center; padding:12px 0; border-bottom:1px solid var(--line); }
@@ -219,8 +220,8 @@
   .choice{ display:grid; grid-template-columns:20px minmax(0,1fr); gap:12px; align-items:start; padding:14px 16px; text-align:left; border:1px solid var(--line-2); border-radius:var(--r-field); background:transparent; transition:border-color .2s; }
   .choice:hover{ border-color:var(--text); }
   .choice i{ width:16px; height:16px; margin-top:2px; border:1.5px solid var(--line-2); border-radius:50%; }
-  .choice[aria-checked=true]{ border-color:var(--signal); }
-  .choice[aria-checked=true] i{ border:5px solid var(--signal); }
+  .choice[aria-checked=true]{ border-color:var(--accent); }
+  .choice[aria-checked=true] i{ border:5px solid var(--accent); }
   .choice b{ display:block; font-size:14.5px; font-weight:600; }
   .choice span{ display:block; margin-top:2px; font-size:13px; color:var(--muted); }
   .form{ margin:0; padding:0; list-style:none; }
@@ -231,7 +232,7 @@
   .input:focus{ border-color:var(--text); box-shadow:var(--focus-glow); }
   .switch{ position:relative; width:42px; height:24px; border:0; border-radius:var(--r-pill); background:var(--line-2); transition:background .2s; }
   .switch::after{ content:""; position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:var(--bg); transition:transform .2s var(--ease); }
-  .switch[aria-checked=true]{ background:var(--signal); }
+  .switch[aria-checked=true]{ background:var(--accent); }
   .switch[aria-checked=true]::after{ transform:translateX(18px); }
   .save-bar{ display:flex; justify-content:flex-end; gap:8px; margin-top:20px; }
   .tabs2{ display:flex; gap:4px; margin-top:24px; }
@@ -253,7 +254,7 @@
 </head>
 <body>
 <header class="top">
-  <div class="brand">oc-free-api<span>.</span></div>
+  <div class="brand"><img src="/assets/icon.png" alt="">7q9k route<span>.</span></div>
   <nav class="nav" id="nav" hidden>
     <a href="#/overview" data-page="overview">Overview</a>
     <a href="#/connect" data-page="connect">Connect</a>
@@ -276,7 +277,7 @@
     <h1 class="title">Log in</h1>
     <p class="lead">You are connecting from another device. Enter the API key to open the dashboard.</p>
     <form id="gateForm" class="field">
-      <input id="gateInput" placeholder="sk-oc-free-…" autocomplete="off" spellcheck="false" aria-label="API key">
+      <input id="gateInput" placeholder="sk-7q9k-…" autocomplete="off" spellcheck="false" aria-label="API key">
       <button class="btn primary" type="submit">Log in</button>
     </form>
     <p class="hint" id="gateHint" aria-live="polite">The API key is in api-key.txt next to the server.</p>
@@ -284,7 +285,7 @@
 
   <section class="stopped" id="stopped" hidden>
     <h1 class="title">Server stopped</h1>
-    <p class="lead" id="stoppedText">Start oc-free-api again to use the dashboard.</p>
+    <p class="lead" id="stoppedText">Start 7q9k route again to use the dashboard.</p>
   </section>
 
   <div id="app" hidden>
@@ -354,6 +355,7 @@
         <div class="section-head"><h2>Examples</h2><button class="text-btn" id="btnSnip">Copy</button></div>
         <div class="code-head"><div class="mode" role="radiogroup" aria-label="Example" id="tabs">
           <button role="radio" data-tab="app" aria-checked="true">App settings</button>
+          <button role="radio" data-tab="agent" aria-checked="false">7q9k-Agent</button>
           <button role="radio" data-tab="python" aria-checked="false">Python</button>
           <button role="radio" data-tab="curl" aria-checked="false">curl</button>
           <button role="radio" data-tab="opencode" aria-checked="false">OpenCode</button>
@@ -365,7 +367,7 @@
 
     <div class="page" data-page="apps" hidden>
       <h1 class="title">Apps</h1>
-      <p class="lead">Add oc-free-api to apps on this computer with one click. The entry stays up to date when the key, port or model list changes.</p>
+      <p class="lead">Add 7q9k route to apps on this computer with one click. The entry stays up to date when the key, port or model list changes.</p>
       <div id="appsLocked" hidden><p class="hint">Apps can only be connected on the computer that runs the server.</p></div>
       <section class="section" id="appsSection">
         <div class="section-head"><h2>Found on this computer</h2><button class="text-btn" id="btnAppsRefresh">Check again</button></div>
@@ -480,7 +482,7 @@
         </section>
         <section class="section">
           <div class="section-head"><h2>Server control</h2></div>
-          <p class="hint">Stopping ends the server. On Windows, start it again by opening oc-free-api.exe.</p>
+          <p class="hint">Stopping ends the server. On Windows, start it again by opening 7q9k-route.exe.</p>
           <div class="save-bar"><button class="btn" data-restart>Restart</button><button class="btn danger" id="btnStop">Stop server</button></div>
         </section>
       </div>
@@ -510,7 +512,7 @@ const fmtDur = s => { const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function applyThemeLabel(){ $('theme').textContent = document.documentElement.dataset.theme === 'dark' ? 'Light' : 'Dark'; }
-$('theme').onclick = () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; try{ localStorage.setItem('ocfree.theme', t) }catch{} applyThemeLabel(); };
+$('theme').onclick = () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = t; try{ localStorage.setItem('7q9k-route.theme', t) }catch{} applyThemeLabel(); };
 applyThemeLabel();
 
 let toastTimer;
@@ -528,7 +530,7 @@ function armed(btn, label, fn){
   };
 }
 
-const store = { get(){ try{ return localStorage.getItem('ocfree.key')||'' }catch{ return '' } }, set(v){ try{ v?localStorage.setItem('ocfree.key',v):localStorage.removeItem('ocfree.key') }catch{} } };
+const store = { get(){ try{ return localStorage.getItem('7q9k-route.key')||localStorage.getItem('ocfree.key')||'' }catch{ return '' } }, set(v){ try{ localStorage.removeItem('ocfree.key'); v?localStorage.setItem('7q9k-route.key',v):localStorage.removeItem('7q9k-route.key') }catch{} } };
 let remoteKey = store.get();
 const authHeaders = (extra={}) => remoteKey ? {...extra, Authorization:'Bearer '+remoteKey} : extra;
 
@@ -597,9 +599,10 @@ function renderSnippet(){
   const shown = revealed && k ? k : '<API key>';
   const s = {
     app:`Provider / type   OpenAI compatible\nBase URL          ${base}/v1\nAPI key           ${shown}\nModel             ${m}\nProtocol          Chat Completions or Responses (both work)`,
+    agent:`# One click: Apps -> 7q9k-Agent -> Connect. Or add this to ~/.7q9k/config.toml:\n\n[model_providers.7q9k-route]\nname = "7q9k route"\nbase_url = "${base}/v1"\nwire_api = "chat"\nexperimental_bearer_token = "${shown}"\n\n# Then pick a model in 7q9k with /model -> 7q9k route.`,
     python:`from openai import OpenAI\n\nclient = OpenAI(base_url="${base}/v1", api_key="${shown}")\nresp = client.chat.completions.create(\n    model="${m}",\n    messages=[{"role": "user", "content": "Hello"}],\n)\nprint(resp.choices[0].message.content)`,
     curl:`curl ${base}/v1/chat/completions \\\n  -H "Authorization: Bearer ${shown}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${m}","messages":[{"role":"user","content":"Hello"}]}'`,
-    opencode:`{\n  "provider": {\n    "oc-free": {\n      "npm": "@ai-sdk/openai-compatible",\n      "options": { "baseURL": "${base}/v1", "apiKey": "${shown}" },\n      "models": { "${m}": {} }\n    }\n  }\n}`,
+    opencode:`{\n  "provider": {\n    "7q9k-route": {\n      "npm": "@ai-sdk/openai-compatible",\n      "options": { "baseURL": "${base}/v1", "apiKey": "${shown}" },\n      "models": { "${m}": {} }\n    }\n  }\n}`,
     ollama:`Ollama clients (Open WebUI, Continue …) use the base URL without /v1:\n\n${base}`,
   };
   $('snip').textContent = s[tab];
@@ -829,7 +832,7 @@ async function restart(btn){
       await sleep(500);
       try{ const h = await fetch(`${location.protocol}//${location.hostname}:${r.port}/health`, {cache:'no-store'}); if (h.ok){ location.href = target; if (String(r.port) === location.port || (!location.port && r.port===80)) location.reload(); return; } }catch{}
     }
-    toast('The server did not come back. Start oc-free-api again.');
+    toast('The server did not come back. Start 7q9k route again.');
   });
 }
 $$('[data-restart]').forEach(b => b.onclick = () => restart(b));
@@ -921,7 +924,7 @@ function renderApps(r){
   }));
   $$('[data-app-disconnect]').forEach(b => armed(b, 'Really remove?', async () => {
     const res = await api('/api/dashboard/integrations/disconnect', {id: b.dataset.appDisconnect});
-    toast(`${res.app.name}: oc-free-api removed`);
+    toast(`${res.app.name}: 7q9k route removed`);
     loadApps();
   }));
 }

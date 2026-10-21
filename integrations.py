@@ -10,8 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-PROVIDER_ID = "oc-free"
-DISPLAY_NAME = "oc-free-api"
+PROVIDER_ID = "7q9k-route"
+DISPLAY_NAME = "7q9k route"
+# Names used before the rename; such entries are replaced on the next connect or sync.
+LEGACY_PROVIDER_IDS = ("oc-free",)
+LEGACY_DISPLAY_NAMES = ("oc-free-api",)
 BACKUPS_KEPT = 10
 _LOCK = threading.Lock()
 
@@ -58,7 +61,7 @@ def _write_text(path: Path, text: str, newline: str, bom: bool, backup_dir: Path
     if bom:
         data = b"\xef\xbb\xbf" + data
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".oc-free-tmp")
+    tmp = path.with_name(path.name + ".7q9k-route-tmp")
     tmp.write_bytes(data)
     os.replace(tmp, path)
 
@@ -158,7 +161,8 @@ class DeepSeekHarness(Integration):
         mine = None
         if providers is not None:
             for i in range(providers + 1, _block_end(lines, providers, 4)):
-                if re.match(rf"^      {re.escape(PROVIDER_ID)}:", lines[i]):
+                if any(re.match(rf"^      {re.escape(pid)}:", lines[i])
+                       for pid in (PROVIDER_ID, *LEGACY_PROVIDER_IDS)):
                     mine = i
                     break
         return start, end, providers, mine
@@ -170,6 +174,8 @@ class DeepSeekHarness(Integration):
         _, _, _, mine = self._find(lines)
         if mine is None:
             return None
+        if not lines[mine].startswith(f"      {PROVIDER_ID}:"):
+            return {"_legacy": True}
         value = lines[mine].split(":", 1)[1].strip()
         if not value.startswith("{"):
             return {"_block": True}
@@ -209,6 +215,11 @@ class DeepSeekHarness(Integration):
         lines = text.split("\n")
         if lines and lines[-1] == "":
             lines.pop()
+        if new_line is not None:
+            # Settings that point at the provider by its old id (e.g. the default model).
+            legacy = "|".join(re.escape(pid) for pid in LEGACY_PROVIDER_IDS)
+            lines = [re.sub(rf"^(\s+provider:\s*)(?:{legacy})(\s*)$", rf"\g<1>{PROVIDER_ID}\2", line)
+                     for line in lines]
         start, end, providers, mine = self._find(lines)
         if new_line is None:
             if mine is None:
@@ -229,7 +240,7 @@ class DeepSeekHarness(Integration):
         else:
             rest = lines[providers].split(":", 1)[1].strip()
             if rest and rest != "{}" and not rest.startswith("#"):
-                raise IntegrationError("providers is written in a form oc-free-api cannot edit safely; add it in the app instead")
+                raise IntegrationError("providers is written in a form 7q9k route cannot edit safely; add it in the app instead")
             lines[providers] = "    providers:"
             if mine is not None:
                 stop = _block_end(lines, mine, 6)
@@ -242,7 +253,7 @@ class DeepSeekHarness(Integration):
 class Hermes(Integration):
     id = "hermes"
     name = "Hermes"
-    restart_hint = "Restart Hermes, then pick the oc-free-api provider in its model settings."
+    restart_hint = "Restart Hermes, then pick the 7q9k route provider in its model settings."
 
     def config_paths(self) -> list[Path]:
         if os.environ.get("HERMES_HOME"):
@@ -294,10 +305,11 @@ class Hermes(Integration):
         indent = self._indent(lines, top)
         for i in range(top + 1, self._list_end(lines, top, indent)):
             line = lines[i]
-            if re.match(rf"^{indent}- \{{", line) and f'"name": "{DISPLAY_NAME}"' in line:
-                return top, i, indent
-            if re.match(rf"^{indent}- name:\s*['\"]?{re.escape(DISPLAY_NAME)}['\"]?\s*$", line):
-                return top, i, indent
+            for name in (DISPLAY_NAME, *LEGACY_DISPLAY_NAMES):
+                if re.match(rf"^{indent}- \{{", line) and f'"name": "{name}"' in line:
+                    return top, i, indent
+                if re.match(rf"^{indent}- name:\s*['\"]?{re.escape(name)}['\"]?\s*$", line):
+                    return top, i, indent
         return top, None, indent
 
     def _item_end(self, lines: list[str], item: int, indent: str) -> int:
@@ -324,7 +336,7 @@ class Hermes(Integration):
             except ValueError:
                 return "outdated"
             return "connected" if current == wanted else "outdated"
-        ok = (target.base_url in block and target.api_key in block
+        ok = (DISPLAY_NAME in block and target.base_url in block and target.api_key in block
               and all(re.search(rf"^\s+{re.escape(m)}:", block, re.M) for m in target.models))
         return "connected" if ok else "outdated"
 
@@ -360,7 +372,7 @@ class Hermes(Integration):
         else:
             rest = lines[top].split(":", 1)[1].strip()
             if rest and rest != "[]" and not rest.startswith("#"):
-                raise IntegrationError("custom_providers is written in a form oc-free-api cannot edit safely")
+                raise IntegrationError("custom_providers is written in a form 7q9k route cannot edit safely")
             lines[top] = "custom_providers:"
             if item is not None:
                 lines[item:self._item_end(lines, item, indent)] = [new_line]
@@ -369,7 +381,89 @@ class Hermes(Integration):
         _write_text(path, "\n".join(lines) + "\n", newline, bom, backup_dir)
 
 
-REGISTRY: list[Integration] = [DeepSeekHarness(), Hermes()]
+class SevenQ9kAgent(Integration):
+    id = "7q9k-agent"
+    name = "7q9k-Agent"
+    restart_hint = "In 7q9k, choose a model with /model under the 7q9k route category."
+
+    def home(self) -> Path:
+        if os.environ.get("CODEX_HOME"):
+            return Path(os.environ["CODEX_HOME"])
+        return _home() / ".7q9k"
+
+    def config_paths(self) -> list[Path]:
+        return [self.home() / "config.toml"]
+
+    def app_present(self) -> bool:
+        return self.home().exists() or (_home() / "bin" / "7q9k-agent.exe").exists()
+
+    @staticmethod
+    def header() -> str:
+        return f"[model_providers.{PROVIDER_ID}]"
+
+    def block(self, target: Target) -> list[str]:
+        # json.dumps yields valid TOML basic strings for these values.
+        return [
+            self.header(),
+            f"name = {json.dumps(DISPLAY_NAME)}",
+            f"base_url = {json.dumps(target.base_url)}",
+            'wire_api = "chat"',
+            f"experimental_bearer_token = {json.dumps(target.api_key)}",
+        ]
+
+    def _span(self, lines: list[str]) -> tuple[int, int] | None:
+        start = next((i for i, l in enumerate(lines) if l.strip() == self.header()), None)
+        if start is None:
+            return None
+        end = start + 1
+        while end < len(lines) and not lines[end].lstrip().startswith("["):
+            end += 1
+        while end > start + 1 and not lines[end - 1].strip():
+            end -= 1
+        return start, end
+
+    def status(self, target: Target) -> str:
+        path = self.config_paths()[0]
+        if not path.exists():
+            return "not_connected"
+        lines = _read_text(path)[0].split("\n")
+        span = self._span(lines)
+        if span is None:
+            return "not_connected"
+        current = [l.strip() for l in lines[span[0]:span[1]] if l.strip()]
+        return "connected" if current == self.block(target) else "outdated"
+
+    def connect(self, target: Target, backup_dir: Path) -> None:
+        self._apply(self.block(target), backup_dir)
+
+    def disconnect(self, backup_dir: Path) -> None:
+        if self.config_paths()[0].exists():
+            self._apply(None, backup_dir)
+
+    def _apply(self, block: list[str] | None, backup_dir: Path) -> None:
+        path = self.config_paths()[0]
+        if path.exists():
+            text, newline, bom = _read_text(path)
+        else:
+            text, newline, bom = "", os.linesep if os.name == "nt" else "\n", False
+        lines = text.split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()
+        span = self._span(lines)
+        if block is None:
+            if span is None:
+                return
+            del lines[span[0]:span[1]]
+        elif span is not None:
+            lines[span[0]:span[1]] = block
+        else:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines += block
+        _write_text(path, "\n".join(lines) + "\n", newline, bom, backup_dir)
+
+
+REGISTRY: list[Integration] = [SevenQ9kAgent(), DeepSeekHarness(), Hermes()]
 
 
 def get(integration_id: str) -> Integration:

@@ -23,11 +23,11 @@ def version_file(ver: str) -> Path:
   kids=[
     StringFileInfo([StringTable('040904B0', [
       StringStruct('CompanyName', '7q9k'),
-      StringStruct('FileDescription', 'oc-free-api'),
+      StringStruct('FileDescription', '7q9k route'),
       StringStruct('FileVersion', '{ver}'),
-      StringStruct('InternalName', 'oc-free-api'),
-      StringStruct('OriginalFilename', 'oc-free-api.exe'),
-      StringStruct('ProductName', 'oc-free-api'),
+      StringStruct('InternalName', '7q9k-route'),
+      StringStruct('OriginalFilename', '7q9k-route.exe'),
+      StringStruct('ProductName', '7q9k route'),
       StringStruct('ProductVersion', '{ver}')])]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])
   ]
@@ -43,7 +43,7 @@ def main() -> None:
     ver = version()
     cmd = [
         sys.executable, "-m", "PyInstaller", "--onefile", "--noconsole", "--noconfirm",
-        "--name", "oc-free-api",
+        "--name", "7q9k-route",
         "--icon", str(ROOT / "assets" / "icon.ico"),
         "--version-file", str(version_file(ver)),
         "--add-data", f"{ROOT / 'dashboard.html'};.",
@@ -54,7 +54,7 @@ def main() -> None:
         str(ROOT / "server.py"),
     ]
     subprocess.run(cmd, check=True)
-    print(f"built dist/oc-free-api.exe ({ver})")
+    print(f"built dist/7q9k-route.exe ({ver})")
 
 
 if __name__ == "__main__":
