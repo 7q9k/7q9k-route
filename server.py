@@ -28,7 +28,7 @@ from typing import Any, Iterator
 
 import integrations
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent

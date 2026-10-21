@@ -1,9 +1,9 @@
 """Draws the 7q9k route icon: the 7q9k hexagon (same purple gradient as
-7q9k-Agent) with a white route mark `o-->`: a start node, a path and an
-arrow head. Writes a multi-size .ico and a 256px .png.
+7q9k-Agent) with a white winding route: a start dot, an S-shaped path and a
+destination ring. Writes a multi-size .ico and a 256px .png.
 
 Geometry uses a 112x112 viewBox like the 7q9k-Agent logo. Small sizes use a
-bolder mark so it stays readable in the taskbar and as a favicon.
+simpler, bolder route so it stays readable in the taskbar and as a favicon.
 """
 
 import math
@@ -20,11 +20,29 @@ ROUNDING = 8.0  # half of the design's round-joined outline stroke
 GRADIENT = ((0.0, (0xD8, 0xC2, 0xFF)), (0.45, (0x9B, 0x6B, 0xFF)), (1.0, (0x6A, 0x38, 0xE6)))
 WHITE = (255, 255, 255)
 
-# Route mark per variant: start node, path and arrow head.
-DETAILED = {"node": (30, 56), "ring": (7.5, 5.0), "line": [(41, 56), (86, 56)],
-            "arrow": [(72, 40), (88, 56), (72, 72)], "stroke": 9.0}
-BOLD = {"node": (30, 56), "dot": 9.0, "line": [(36, 56), (86, 56)],
-        "arrow": [(70, 37), (90, 56), (70, 75)], "stroke": 12.0}
+
+def arc(cx, cy, r, a0, a1, steps=24):
+    """Points on a circle from angle a0 to a1 (degrees, y pointing down)."""
+    return [(cx + r * math.cos(math.radians(a0 + (a1 - a0) * i / steps)),
+             cy + r * math.sin(math.radians(a0 + (a1 - a0) * i / steps))) for i in range(steps + 1)]
+
+
+# Route per variant: path, start dot (center, radius) and destination ring
+# (center, radius, thickness).
+DETAILED = {
+    # Right along the bottom, U-turn up, left, U-turn up, right to the goal.
+    "path": [(38, 74)] + arc(66, 65, 9, 90, -90) + arc(46, 47, 9, 90, 270) + [(70, 38)],
+    "stroke": 7.0,
+    "dot": ((38, 74), 9.0),
+    "ring": ((75, 38), 8.5, 5.5),
+}
+BOLD = {
+    # One step: right, up, right.
+    "path": [(34, 74), (56, 74), (56, 40), (74, 40)],
+    "stroke": 12.0,
+    "dot": ((34, 74), 11.0),
+    "ring": ((76, 40), 12.0, 8.0),
+}
 
 
 def seg_dist(px, py, a, b):
@@ -65,14 +83,13 @@ def color_at(x, y, mark):
     closed = HEXAGON + [HEXAGON[0]]
     if not inside_hexagon(x, y) and line_dist(x, y, closed) > ROUNDING:
         return None
-    half = mark["stroke"] / 2
-    nx, ny = mark["node"]
-    node = math.hypot(x - nx, y - ny)
+    (dx, dy), dot_r = mark["dot"]
+    (rx, ry), ring_r, ring_w = mark["ring"]
+    ring = math.hypot(x - rx, y - ry)
     on_mark = (
-        line_dist(x, y, mark["line"]) <= half
-        or line_dist(x, y, mark["arrow"]) <= half
-        or ("ring" in mark and abs(node - mark["ring"][0]) <= mark["ring"][1] / 2)
-        or ("dot" in mark and node <= mark["dot"])
+        (line_dist(x, y, mark["path"]) <= mark["stroke"] / 2 and ring > ring_r - ring_w / 2)
+        or math.hypot(x - dx, y - dy) <= dot_r
+        or abs(ring - ring_r) <= ring_w / 2
     )
     if on_mark:
         return WHITE
