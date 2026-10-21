@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import difflib
 import http.client
 import ipaddress
 import itertools
@@ -28,7 +29,7 @@ from typing import Any, Iterator
 
 import integrations
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -1671,7 +1672,8 @@ class Pricing:
         self.error: str | None = None
         self._refreshing = False
         self._last_attempt = 0.0
-        self._matches: dict[str, str | None] = {}
+        # model -> (OpenRouter id, exact match?)
+        self._matches: dict[str, tuple[str | None, bool]] = {}
         if path is not None:
             self._load()
 
@@ -1747,6 +1749,9 @@ class Pricing:
         threading.Thread(target=run, daemon=True).start()
 
     def match(self, model: str) -> str | None:
+        return self._lookup(model)[0]
+
+    def _lookup(self, model: str) -> tuple[str | None, bool]:
         with self.lock:
             if model in self._matches:
                 return self._matches[model]
@@ -1755,7 +1760,14 @@ class Pricing:
             self._matches[model] = found
         return found
 
-    def _find(self, model: str) -> str | None:
+    def _find(self, model: str) -> tuple[str | None, bool]:
+        """The paid OpenRouter model for an OpenCode model id.
+
+        Exact names win. Otherwise the closest paid model of the same family is
+        used (e.g. minimax-m3.1-flash -> minimax/minimax-m3), so new free models
+        get a value without adding them by hand. Free (`:free`), batch and
+        `~latest` aliases are skipped because they do not reflect the real price.
+        """
         base = model[: -len("-free")] if model.endswith("-free") else model
         candidates = [base]
         if base.endswith("-preview"):
@@ -1765,18 +1777,33 @@ class Pricing:
                 i for i in self.prices
                 if ":" not in i and not i.startswith("~") and "/" in i
             )
+        names = {model_id: model_id.split("/", 1)[1] for model_id in ids}
         for candidate in candidates:
             for model_id in ids:
-                if model_id.split("/", 1)[1] == candidate:
-                    return model_id
-        return None
+                if names[model_id] == candidate:
+                    return model_id, True
+        family = base.split("-", 1)[0]
+        similar = [model_id for model_id in ids if names[model_id].split("-", 1)[0] == family]
+        if not similar:
+            return None, False
+        # Longest shared start first (keeps the version: m3.1 -> m3, not m2.1),
+        # then overall similarity, then the shorter, plainer name.
+        best = max(
+            similar,
+            key=lambda model_id: (
+                len(os.path.commonprefix([base, names[model_id]])),
+                difflib.SequenceMatcher(None, base, names[model_id]).ratio(),
+                -len(names[model_id]),
+            ),
+        )
+        return best, False
 
     def for_model(self, model: str) -> dict[str, Any] | None:
-        model_id = self.match(model)
+        model_id, exact = self._lookup(model)
         if model_id is None:
             return None
         with self.lock:
-            return {"openrouter_id": model_id, **self.prices[model_id]}
+            return {"openrouter_id": model_id, "similar": not exact, **self.prices[model_id]}
 
     def info(self) -> dict[str, Any]:
         with self.lock:
@@ -1826,6 +1853,7 @@ def usage_report(snapshot: dict[str, Any], pricing: "Pricing") -> dict[str, Any]
                 "cost_usd": cost,
                 "price": None if price is None else {
                     "openrouter_id": price["openrouter_id"],
+                    "similar": price["similar"],
                     "prompt_per_m": price["prompt"] * 1_000_000,
                     "completion_per_m": price["completion"] * 1_000_000,
                     "cache_read_per_m": price["cache_read"] * 1_000_000 if "cache_read" in price else None,

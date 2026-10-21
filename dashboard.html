@@ -700,7 +700,7 @@ function renderStats(){
   $('kTok').textContent = fmtInt(s.tokens_in + s.tokens_out);
   $('kTokHint').textContent = `${fmtInt(s.tokens_in)} input · ${fmtInt(s.tokens_out)} output`;
   $('kCost').textContent = fmtUsd(s.usage?.total_cost_usd ?? 0);
-  $('kCostHint').textContent = s.usage?.unpriced_tokens ? `excl. ${fmtInt(s.usage.unpriced_tokens)} unpriced tokens` : 'you pay $0';
+  $('kCostHint').textContent = s.usage?.unpriced_tokens ? `excl. ${fmtInt(s.usage.unpriced_tokens)} tokens without a price` : 'you pay $0';
   $('kLat').textContent = fmtMs(s.avg_ms);
   const last=[...s.log].reverse().find(e=>e.model);
   $('kLatHint').textContent = last ? `last ${fmtMs(last.ms)}` : 'no requests yet';
@@ -715,7 +715,7 @@ function renderUsage(){
   $('usage').innerHTML = rows.map(r=>{
     const p=r.price;
     const priceLine = p
-      ? `${esc(p.openrouter_id)} · ${fmtPerM(p.prompt_per_m)} input / ${fmtPerM(p.completion_per_m)} output per 1M tokens`
+      ? `${p.similar ? 'closest match ' : ''}${esc(p.openrouter_id)} · ${fmtPerM(p.prompt_per_m)} input / ${fmtPerM(p.completion_per_m)} output per 1M tokens`
       : 'no matching model on OpenRouter, so no price';
     const cached = r.tokens_cached ? ` <span class="p">(${fmtInt(r.tokens_cached)} cached)</span>` : '';
     return `<tr class="${r.requests?'':'idle'}"><td><div class="m">${esc(r.model)}</div><div class="p">${priceLine}</div></td><td class="r" data-l="Requests">${fmtInt(r.requests)}</td><td class="r" data-l="Input">${fmtInt(r.tokens_in)}${cached}</td><td class="r" data-l="Output">${fmtInt(r.tokens_out)}</td><td class="r" data-l="Cost">${r.cost_usd==null?'–':fmtUsd(r.cost_usd)}</td></tr>`;
@@ -724,7 +724,7 @@ function renderUsage(){
   $('usageTotal').innerHTML = `<tr><td>Total</td><td class="r" data-l="Requests">${fmtInt(sum('requests'))}</td><td class="r" data-l="Input">${fmtInt(sum('tokens_in'))}</td><td class="r" data-l="Output">${fmtInt(sum('tokens_out'))}</td><td class="r" data-l="Cost">${fmtUsd(u.total_cost_usd)}</td></tr>`;
   const pi=u.pricing||{};
   $('priceNote').textContent = (pi.fetched ? `Live prices from OpenRouter, ${fmtDate(pi.fetched)}. ` : 'Loading OpenRouter prices. ')
-    + 'This is what the same tokens would cost on OpenRouter. OpenCode charges nothing.'
+    + 'This is what the same tokens would cost on OpenRouter. Models without an exact match use the closest paid model of the same family. OpenCode charges nothing.'
     + (pi.error ? ` Last fetch failed: ${pi.error}` : '');
 }
 

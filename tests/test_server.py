@@ -266,7 +266,19 @@ class PureFunctionTests(unittest.TestCase):
         self.assertEqual(p.match("glm-5.3-flash-free"), "z-ai/glm-5.3-flash")
         self.assertEqual(p.match("longcat-2.5-preview-free"), "inclusionai/longcat-2.5")
         self.assertIsNone(p.match("big-pickle"))
-        self.assertIsNone(p.match("muse-spark-free"))
+
+    def test_pricing_match_falls_back_to_closest_family_model(self):
+        p = fake_pricing()
+        p.prices["minimax/minimax-m3"] = {"prompt": 3e-07, "completion": 1.2e-06}
+        p.prices["minimax/minimax-m2.5"] = {"prompt": 2e-07, "completion": 1e-06}
+        p.prices["minimax/minimax-m3.1-flash:free"] = {"prompt": 0.0, "completion": 0.0}
+        self.assertEqual(p.match("minimax-m3.1-flash-free"), "minimax/minimax-m3")
+        self.assertEqual(p.match("muse-spark-free"), "meta/muse-spark-1.3")
+        exact = p.for_model("glm-5.3-flash-free")
+        similar = p.for_model("minimax-m3.1-flash-free")
+        self.assertFalse(exact["similar"])
+        self.assertTrue(similar["similar"])
+        self.assertIsNone(p.for_model("big-pickle"))
 
     def test_usage_cost(self):
         price = {"prompt": 1e-06, "completion": 2e-06, "cache_read": 1e-07}
