@@ -88,6 +88,21 @@ class SevenQ9kAgentTests(Base):
         self.app.disconnect(self.backups)
         self.assertEqual(self.path.read_text(encoding="utf-8").rstrip("\n"), self.existing.rstrip("\n"))
 
+    def test_disconnect_drops_selection_of_7q9k_route(self):
+        self.path.write_text(
+            'model_provider = "7q9k-route"\nmodel = "deepseek-v4.1-flash-free"\n'
+            'model_reasoning_effort = "medium"\n\n[tui]\nx = 1\n',
+            encoding="utf-8",
+        )
+        self.app.connect(target(), self.backups)
+        self.app.disconnect(self.backups)
+        text = self.path.read_text(encoding="utf-8")
+        self.assertNotIn("model_provider", text)
+        self.assertNotIn("deepseek-v4.1-flash-free", text)
+        self.assertNotIn("7q9k-route", text)
+        self.assertIn('model_reasoning_effort = "medium"', text)
+        self.assertIn("[tui]\nx = 1", text)
+
     def test_respects_codex_home(self):
         other = Path(self.tmp.name) / "custom-home"
         with mock.patch.dict(integrations.os.environ, {"CODEX_HOME": str(other)}):

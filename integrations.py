@@ -395,7 +395,27 @@ class SevenQ9kAgent(Integration):
         return [self.home() / "config.toml"]
 
     def app_present(self) -> bool:
-        return self.home().exists() or (_home() / "bin" / "7q9k-agent.exe").exists()
+        programs = Path(os.environ.get("LOCALAPPDATA") or _home() / "AppData" / "Local") / "Programs"
+        return (
+            self.home().exists()
+            or (_home() / "bin" / "7q9k-agent.exe").exists()
+            or (programs / "7q9k-Agent" / "7q9k-agent.exe").exists()
+        )
+
+    @staticmethod
+    def _drop_selection(lines: list[str]) -> None:
+        """Remove a top-level `model_provider = "7q9k-route"` and its `model`.
+
+        Without this the agent would keep selecting a provider whose block is gone.
+        """
+        top_end = next((i for i, l in enumerate(lines) if l.lstrip().startswith("[")), len(lines))
+        selects_us = re.compile(r"""^\s*model_provider\s*=\s*["']%s["']\s*(#.*)?$""" % re.escape(PROVIDER_ID))
+        if not any(selects_us.match(l) for l in lines[:top_end]):
+            return
+        model_line = re.compile(r"^\s*model\s*=")
+        lines[:top_end] = [
+            l for l in lines[:top_end] if not selects_us.match(l) and not model_line.match(l)
+        ]
 
     @staticmethod
     def header() -> str:
@@ -454,6 +474,7 @@ class SevenQ9kAgent(Integration):
             if span is None:
                 return
             del lines[span[0]:span[1]]
+            self._drop_selection(lines)
         elif span is not None:
             lines[span[0]:span[1]] = block
         else:
