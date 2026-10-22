@@ -2,14 +2,14 @@
 
 # 7q9k route
 
-Local server that exposes OpenCode Zen's free models as an OpenAI-, Anthropic- and Ollama-compatible API, with a web dashboard. Python standard library only. Personal use. Formerly `oc-free-api`.
+Local server that exposes OpenCode Zen's free models as an OpenAI-, Anthropic- and Ollama-compatible API, with a web dashboard. Written in Rust, one self-contained binary. Personal use. Formerly `oc-free-api`.
 
 ## Download
 
 From [Releases](https://github.com/7q9k/7q9k-route/releases):
 
-- `7q9k-route-<version>.exe`: Windows, no Python needed. Double-click it. Your key, stats and settings are stored in `%LOCALAPPDATA%\7q9k-route`, not next to the exe.
-- `7q9k-route-<version>-python.zip`: any OS with Python 3.10+. Unzip and run `python server.py`.
+- `7q9k-route-<version>.exe`: Windows. Double-click it. Your key, stats and settings are stored in `%LOCALAPPDATA%\7q9k-route`, not next to the exe.
+- Other systems (Linux, macOS): build it yourself, see [Build](#build).
 
 Upgrading from oc-free-api: the first start moves your key, stats, settings and app backups from `%LOCALAPPDATA%\oc-free-api`, keeps "start with Windows" on, and replaces the old entries in connected apps.
 
@@ -25,7 +25,7 @@ Command line options (optional): `--port`, `--host`, `--key`, `--no-browser`, `-
 
 ## Apps
 
-The Apps tab finds supported apps on this computer and adds 7q9k route to them with one click: Claude Code, DeepSeek Harness and Hermes. A backup of each changed file is kept, and connected apps are updated automatically when the key, port or model list changes. New apps are added as a small class in `integrations.py`.
+The Apps tab finds supported apps on this computer and adds 7q9k route to them with one click: Claude Code, DeepSeek Harness and Hermes. A backup of each changed file is kept, and connected apps are updated automatically when the key, port or model list changes. New apps are added as a small type in `src/integrations.rs`.
 
 Under Settings you can set your own fixed API key; it stays the same across restarts and updates.
 
@@ -65,11 +65,23 @@ Free models sometimes answer HTTP 503 ("Endpoint is unavailable") for a few seco
 
 OpenCode is not unlimited. Free models are rate-limited per IP; there is no official number (users report about 200 requests/day). When the limit is hit, OpenCode returns HTTP 429 `FreeUsageLimitError`. These are never retried.
 
+## Build
+
+Needs a Rust toolchain (1.80 or newer).
+
+```
+cargo build --release
+```
+
+The binary is `target/release/7q9k-route` (`.exe` on Windows). Options: `--host`, `--port`, `--key`, `--no-save`, `--refresh-models`, `--no-browser`, `--background` (see `--help`).
+
 ## Tests
 
 ```
-python -m unittest discover -s tests
+cargo test
 ```
+
+`tests/e2e.rs` starts the real binary against a fake upstream and checks every API.
 
 ## Notes
 
