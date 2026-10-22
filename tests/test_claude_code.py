@@ -235,7 +235,17 @@ class AnthropicServerTests(ServerTests):
         data = json.loads(self.request("GET", "/v1/models", headers={"anthropic-version": "2023-06-01"})[1])
         self.assertFalse(data["has_more"])
         self.assertEqual(data["data"][0]["type"], "model")
-        self.assertEqual(data["first_id"], "big-pickle")
+        self.assertEqual(data["first_id"], "anthropic-route-big-pickle")
+        self.assertEqual(data["data"][0]["display_name"], "big-pickle")
+        plain = json.loads(self.request("GET", "/v1/models")[1])
+        self.assertEqual(plain["data"][0]["id"], "big-pickle")
+
+    def test_listed_model_ids_are_accepted(self):
+        status, body = self.request("POST", "/v1/messages", {
+            "model": "anthropic-route-muse-spark-1.3-contributor-free",
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+        self.assertEqual(status, 200)
 
 
 # Run only the tests above here; the inherited ServerTests run in test_server.

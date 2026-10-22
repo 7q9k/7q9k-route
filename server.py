@@ -29,7 +29,7 @@ from typing import Any, Iterator
 
 import integrations
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -1414,6 +1414,8 @@ ANTHROPIC_ERROR_TYPES = {
 ANTHROPIC_THINKING_SIGNATURE = "7q9k-route"
 # Model names Claude Code uses on its own (aliases, background tasks).
 CLAUDE_MODEL_ALIASES = frozenset({"opus", "sonnet", "haiku", "default", "best", "opusplan"})
+# Claude Code's /model only lists gateway models whose id names Claude or Anthropic.
+ANTHROPIC_MODEL_PREFIX = "anthropic-route-"
 
 
 def _anthropic_blocks(content: Any) -> list[dict[str, Any]]:
@@ -3152,18 +3154,20 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     def _get_models(self) -> None:
         models = available_models()
+        prefix = ANTHROPIC_MODEL_PREFIX if self.headers.get("anthropic-version") else ""
         self._send_json(
             200,
             {
                 "object": "list",
                 "data": [
-                    {"id": model, "object": "model", "created": 0, "owned_by": "opencode",
-                     "type": "model", "display_name": model, "created_at": "1970-01-01T00:00:00Z"}
+                    {"id": prefix + model, "object": "model", "created": 0, "owned_by": "opencode",
+                     "type": "model", "display_name": model, "created_at": "1970-01-01T00:00:00Z",
+                     "description": "Free via 7q9k route"}
                     for model in models
                 ],
                 "has_more": False,
-                "first_id": models[0] if models else None,
-                "last_id": models[-1] if models else None,
+                "first_id": prefix + models[0] if models else None,
+                "last_id": prefix + models[-1] if models else None,
             },
         )
 
@@ -3505,6 +3509,8 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
 
     def _resolve_anthropic_model(self, name: Any) -> str:
         text = re.sub(r"\[[^\]]*\]$", "", str(name or "").strip())  # "[1m]" context suffix
+        if text.startswith(ANTHROPIC_MODEL_PREFIX):
+            text = text[len(ANTHROPIC_MODEL_PREFIX):]
         bare = text.split("/", 1)[1] if text.startswith("opencode/") else text
         models = available_models()
         lowered = bare.lower()

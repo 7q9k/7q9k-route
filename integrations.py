@@ -384,7 +384,7 @@ class Hermes(Integration):
 class ClaudeCode(Integration):
     id = "claude-code"
     name = "Claude Code"
-    restart_hint = "Start a new Claude Code session. Switch models with /model <name>, e.g. /model big-pickle."
+    restart_hint = "Start a new Claude Code session; /model lists every free model."
     # Marks the env entries as ours, so another local proxy set up by hand is never touched.
     marker = "ROUTE7Q9K_PROVIDER"
     model_keys = (
@@ -392,8 +392,15 @@ class ClaudeCode(Integration):
         "ANTHROPIC_DEFAULT_OPUS_MODEL",
         "ANTHROPIC_DEFAULT_SONNET_MODEL",
         "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
         "CLAUDE_CODE_SUBAGENT_MODEL",
     )
+    fixed = {
+        # /model lists every model from GET /v1/models.
+        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+        # Otherwise Claude Code adds "[1m]" to the default model.
+        "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
+    }
 
     def home(self) -> Path:
         if os.environ.get("CLAUDE_CONFIG_DIR"):
@@ -418,6 +425,7 @@ class ClaudeCode(Integration):
         base = target.base_url[:-3] if target.base_url.endswith("/v1") else target.base_url
         values = {"ANTHROPIC_BASE_URL": base, "ANTHROPIC_AUTH_TOKEN": target.api_key}
         values.update({key: target.default_model for key in self.model_keys})
+        values.update(self.fixed)
         values[self.marker] = PROVIDER_ID
         return values
 
@@ -461,7 +469,7 @@ class ClaudeCode(Integration):
         env = data.get("env") or {}
         if env.get(self.marker) != PROVIDER_ID:
             return
-        for key in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", *self.model_keys, self.marker):
+        for key in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", *self.model_keys, *self.fixed, self.marker):
             env.pop(key, None)
         if not env:
             data.pop("env", None)

@@ -31,7 +31,7 @@ Under Settings you can set your own fixed API key; it stays the same across rest
 
 ## Claude Code
 
-Apps -> Claude Code -> Connect writes the route into the `env` block of `~/.claude/settings.json` (or `%CLAUDE_CONFIG_DIR%`): `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and the model settings (`ANTHROPIC_MODEL`, the opus/sonnet/haiku defaults and the subagent model), all set to the default model. Start a new `claude` session and switch models with `/model <name>`, e.g. `/model big-pickle`. Requests for Claude model names (`claude-...`, `opus`, `sonnet`, `haiku`) go to the default model.
+Apps -> Claude Code -> Connect writes the route into the `env` block of `~/.claude/settings.json` (or `%CLAUDE_CONFIG_DIR%`): `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and the model settings (`ANTHROPIC_MODEL`, the opus/sonnet/haiku/fable defaults and the subagent model), all set to the default model. It also turns on gateway model discovery, so `/model` in a new `claude` session lists every free model. Claude Code only lists ids that name Claude or Anthropic, so they appear as `anthropic-route-<model>` (shown with the plain name); `/model big-pickle` works too. Requests for Claude model names (`claude-...`, `opus`, `sonnet`, `haiku`) go to the default model.
 
 This applies to every Claude Code session on the computer, including the desktop app. Disconnect removes exactly these entries again and Claude Code goes back to your Anthropic login.
 
