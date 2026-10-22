@@ -1,5 +1,4 @@
-"""Tests for the rename to 7q9k route, the 7q9k-Agent app, and
-retrying upstream 5xx errors."""
+"""Tests for the rename to 7q9k route and retrying upstream 5xx errors."""
 
 from __future__ import annotations
 
@@ -60,53 +59,6 @@ class UpstreamRetryTests(unittest.TestCase):
                 server.upstream_stream("https://x", {"model": "m"})
         self.assertEqual(opener.call_count, 1)
         self.assertEqual(caught.exception.status_code, 429)
-
-
-class SevenQ9kAgentTests(Base):
-    def setUp(self):
-        super().setUp()
-        self.app = integrations.SevenQ9kAgent()
-        self.path = self.home / ".7q9k" / "config.toml"
-        self.path.parent.mkdir()
-        self.existing = 'model_provider = "deepseek"\n\n[model_providers.deepseek]\nname = "DeepSeek"\n'
-        self.path.write_text(self.existing, encoding="utf-8")
-
-    def test_connect_update_disconnect_keeps_other_settings(self):
-        self.assertTrue(self.app.installed())
-        self.assertEqual(self.app.status(target()), "not_connected")
-        self.app.connect(target(), self.backups)
-        text = self.path.read_text(encoding="utf-8")
-        self.assertTrue(text.startswith(self.existing))
-        self.assertIn('[model_providers.7q9k-route]\nname = "7q9k route"\n', text)
-        self.assertIn('base_url = "http://127.0.0.1:8787/v1"\nwire_api = "chat"\n', text)
-        self.assertEqual(self.app.status(target()), "connected")
-        self.assertEqual(self.app.status(target(port=9000)), "outdated")
-        self.app.connect(target(port=9000), self.backups)
-        text = self.path.read_text(encoding="utf-8")
-        self.assertEqual(text.count("[model_providers.7q9k-route]"), 1)
-        self.assertIn("127.0.0.1:9000", text)
-        self.app.disconnect(self.backups)
-        self.assertEqual(self.path.read_text(encoding="utf-8").rstrip("\n"), self.existing.rstrip("\n"))
-
-    def test_disconnect_drops_selection_of_7q9k_route(self):
-        self.path.write_text(
-            'model_provider = "7q9k-route"\nmodel = "deepseek-v4.1-flash-free"\n'
-            'model_reasoning_effort = "medium"\n\n[tui]\nx = 1\n',
-            encoding="utf-8",
-        )
-        self.app.connect(target(), self.backups)
-        self.app.disconnect(self.backups)
-        text = self.path.read_text(encoding="utf-8")
-        self.assertNotIn("model_provider", text)
-        self.assertNotIn("deepseek-v4.1-flash-free", text)
-        self.assertNotIn("7q9k-route", text)
-        self.assertIn('model_reasoning_effort = "medium"', text)
-        self.assertIn("[tui]\nx = 1", text)
-
-    def test_respects_codex_home(self):
-        other = Path(self.tmp.name) / "custom-home"
-        with mock.patch.dict(integrations.os.environ, {"CODEX_HOME": str(other)}):
-            self.assertEqual(self.app.config_paths(), [other / "config.toml"])
 
 
 class LegacyEntryTests(Base):

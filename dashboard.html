@@ -400,7 +400,7 @@
         <div class="section-head"><h2>Examples</h2><button class="text-btn" id="btnSnip">Copy</button></div>
         <div class="code-head"><div class="mode" role="radiogroup" aria-label="Example" id="tabs">
           <button role="radio" data-tab="app" aria-checked="true">App settings</button>
-          <button role="radio" data-tab="agent" aria-checked="false">7q9k-Agent</button>
+          <button role="radio" data-tab="claude" aria-checked="false">Claude Code</button>
           <button role="radio" data-tab="python" aria-checked="false">Python</button>
           <button role="radio" data-tab="curl" aria-checked="false">curl</button>
           <button role="radio" data-tab="opencode" aria-checked="false">OpenCode</button>
@@ -650,7 +650,7 @@ function renderSnippet(){
   const shown = revealed && k ? k : '<API key>';
   const s = {
     app:`Provider / type   OpenAI compatible\nBase URL          ${base}/v1\nAPI key           ${shown}\nModel             ${m}\nProtocol          Chat Completions or Responses (both work)`,
-    agent:`# One click: Apps -> 7q9k-Agent -> Connect. Or add this to ~/.7q9k/config.toml:\n\n[model_providers.7q9k-route]\nname = "7q9k route"\nbase_url = "${base}/v1"\nwire_api = "chat"\nexperimental_bearer_token = "${shown}"\n\n# Then pick a model in 7q9k with /model -> 7q9k route.`,
+    claude:`# One click: Apps -> Claude Code -> Connect. Or add this to ~/.claude/settings.json:\n\n{\n  "env": {\n    "ANTHROPIC_BASE_URL": "${base}",\n    "ANTHROPIC_AUTH_TOKEN": "${shown}",\n    "ANTHROPIC_MODEL": "${m}",\n    "ANTHROPIC_DEFAULT_OPUS_MODEL": "${m}",\n    "ANTHROPIC_DEFAULT_SONNET_MODEL": "${m}",\n    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "${m}",\n    "CLAUDE_CODE_SUBAGENT_MODEL": "${m}"\n  }\n}\n\n# Then start claude and switch models with /model <name>, e.g. /model ${m}.`,
     python:`from openai import OpenAI\n\nclient = OpenAI(base_url="${base}/v1", api_key="${shown}")\nresp = client.chat.completions.create(\n    model="${m}",\n    messages=[{"role": "user", "content": "Hello"}],\n)\nprint(resp.choices[0].message.content)`,
     curl:`curl ${base}/v1/chat/completions \\\n  -H "Authorization: Bearer ${shown}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${m}","messages":[{"role":"user","content":"Hello"}]}'`,
     opencode:`{\n  "provider": {\n    "7q9k-route": {\n      "npm": "@ai-sdk/openai-compatible",\n      "options": { "baseURL": "${base}/v1", "apiKey": "${shown}" },\n      "models": { "${m}": {} }\n    }\n  }\n}`,

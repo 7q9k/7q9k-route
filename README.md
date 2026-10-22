@@ -2,7 +2,7 @@
 
 # 7q9k route
 
-Local server that exposes OpenCode Zen's free models as an OpenAI- and Ollama-compatible API, with a web dashboard. Python standard library only. Personal use. Formerly `oc-free-api`.
+Local server that exposes OpenCode Zen's free models as an OpenAI-, Anthropic- and Ollama-compatible API, with a web dashboard. Python standard library only. Personal use. Formerly `oc-free-api`.
 
 ## Download
 
@@ -25,9 +25,17 @@ Command line options (optional): `--port`, `--host`, `--key`, `--no-browser`, `-
 
 ## Apps
 
-The Apps tab finds supported apps on this computer and adds 7q9k route to them with one click: 7q9k-Agent, DeepSeek Harness and Hermes. A backup of each changed file is kept, and connected apps are updated automatically when the key, port or model list changes. New apps are added as a small class in `integrations.py`.
+The Apps tab finds supported apps on this computer and adds 7q9k route to them with one click: Claude Code, DeepSeek Harness and Hermes. A backup of each changed file is kept, and connected apps are updated automatically when the key, port or model list changes. New apps are added as a small class in `integrations.py`.
 
 Under Settings you can set your own fixed API key; it stays the same across restarts and updates.
+
+## Claude Code
+
+Apps -> Claude Code -> Connect writes the route into the `env` block of `~/.claude/settings.json` (or `%CLAUDE_CONFIG_DIR%`): `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and the model settings (`ANTHROPIC_MODEL`, the opus/sonnet/haiku defaults and the subagent model), all set to the default model. Start a new `claude` session and switch models with `/model <name>`, e.g. `/model big-pickle`. Requests for Claude model names (`claude-...`, `opus`, `sonnet`, `haiku`) go to the default model.
+
+This applies to every Claude Code session on the computer, including the desktop app. Disconnect removes exactly these entries again and Claude Code goes back to your Anthropic login.
+
+Not available through the route: Anthropic's server tools (web search, web fetch on Anthropic's side) and prompt caching. Token counts in Claude Code are estimates.
 
 ## Access
 
@@ -41,6 +49,7 @@ Under Settings you can set your own fixed API key; it stays the same across rest
 |---|---|
 | `POST /v1/chat/completions` | OpenAI Chat Completions (stream, tools) |
 | `POST /v1/responses` | OpenAI Responses API (stateless) |
+| `POST /v1/messages`, `/v1/messages/count_tokens` | Anthropic Messages API (stream, tools), used by Claude Code |
 | `GET /v1/models` | model list |
 | `POST /api/chat`, `/api/generate`, `GET /api/tags` | Ollama-compatible |
 

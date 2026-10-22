@@ -29,7 +29,7 @@ from typing import Any, Iterator
 
 import integrations
 
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.1.0"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -1392,6 +1392,377 @@ def ollama_generate_response(completion: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Anthropic Messages API, used by Claude Code. Requests are turned into Chat
+# Completions for OpenCode and the answer is turned back into Anthropic blocks.
+
+ANTHROPIC_STOP_REASONS = {
+    "stop": "end_turn",
+    "length": "max_tokens",
+    "tool_calls": "tool_use",
+    "function_call": "tool_use",
+    "content_filter": "refusal",
+}
+ANTHROPIC_ERROR_TYPES = {
+    400: "invalid_request_error",
+    401: "authentication_error",
+    403: "permission_error",
+    404: "not_found_error",
+    413: "request_too_large",
+    429: "rate_limit_error",
+}
+# Thinking blocks need a signature; Claude Code sends it back but nothing checks it here.
+ANTHROPIC_THINKING_SIGNATURE = "7q9k-route"
+# Model names Claude Code uses on its own (aliases, background tasks).
+CLAUDE_MODEL_ALIASES = frozenset({"opus", "sonnet", "haiku", "default", "best", "opusplan"})
+
+
+def _anthropic_blocks(content: Any) -> list[dict[str, Any]]:
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    if not isinstance(content, list):
+        return []
+    return [
+        {"type": "text", "text": block} if isinstance(block, str) else block
+        for block in content
+        if isinstance(block, (str, dict))
+    ]
+
+
+def _anthropic_text(content: Any) -> str:
+    return "\n\n".join(
+        str(block.get("text") or "")
+        for block in _anthropic_blocks(content)
+        if block.get("type") == "text" and block.get("text")
+    )
+
+
+def _anthropic_image(block: dict[str, Any]) -> dict[str, Any] | None:
+    source = block.get("source") if isinstance(block.get("source"), dict) else {}
+    if source.get("type") == "base64" and source.get("data"):
+        url = f"data:{source.get('media_type') or 'image/png'};base64,{source['data']}"
+    elif source.get("type") == "url" and source.get("url"):
+        url = str(source["url"])
+    else:
+        return None
+    return {"type": "image_url", "image_url": {"url": url}}
+
+
+def _anthropic_tool_result(block: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    """Text for the tool message and images, which tool messages cannot carry."""
+    content = block.get("content")
+    if isinstance(content, list):
+        texts, images = [], []
+        for part in _anthropic_blocks(content):
+            if part.get("type") == "text":
+                texts.append(str(part.get("text") or ""))
+            elif part.get("type") == "image":
+                image = _anthropic_image(part)
+                if image:
+                    images.append(image)
+                    texts.append("[image attached below]")
+        text = "\n".join(texts)
+    else:
+        text, images = ("" if content is None else str(content)), []
+    if block.get("is_error"):
+        text = "Error: " + text
+    return text or "(no output)", images
+
+
+def _anthropic_user_content(parts: list[dict[str, Any]]) -> Any:
+    if all(part["type"] == "text" for part in parts):
+        return "\n\n".join(part["text"] for part in parts)
+    return parts
+
+
+def anthropic_to_chat_messages(req: dict[str, Any]) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    system = _anthropic_text(req.get("system"))
+    if system.strip():
+        messages.append({"role": "system", "content": system})
+    for message in validate_messages(req.get("messages")):
+        blocks = _anthropic_blocks(message.get("content"))
+        if message.get("role") == "assistant":
+            texts: list[str] = []
+            calls: list[dict[str, Any]] = []
+            for block in blocks:
+                kind = block.get("type")
+                if kind == "text":
+                    texts.append(str(block.get("text") or ""))
+                elif kind in ("tool_use", "server_tool_use"):
+                    arguments = block.get("input") if block.get("input") is not None else {}
+                    calls.append(
+                        {
+                            "id": str(block.get("id") or f"toolu_{len(calls)}"),
+                            "type": "function",
+                            "function": {
+                                "name": str(block.get("name") or ""),
+                                "arguments": json.dumps(arguments, ensure_ascii=False),
+                            },
+                        }
+                    )
+            entry: dict[str, Any] = {"role": "assistant", "content": "".join(texts) or None}
+            if calls:
+                entry["tool_calls"] = calls
+            if entry["content"] is not None or calls:
+                messages.append(entry)
+            continue
+        parts: list[dict[str, Any]] = []
+        images: list[dict[str, Any]] = []
+        for block in blocks:
+            kind = block.get("type")
+            if kind == "tool_result":
+                text, found = _anthropic_tool_result(block)
+                messages.append(
+                    {"role": "tool", "tool_call_id": str(block.get("tool_use_id") or ""), "content": text}
+                )
+                images.extend(found)
+            elif kind == "text" and block.get("text"):
+                parts.append({"type": "text", "text": str(block["text"])})
+            elif kind == "image":
+                image = _anthropic_image(block)
+                if image:
+                    parts.append(image)
+            elif kind == "document":
+                source = block.get("source") if isinstance(block.get("source"), dict) else {}
+                if source.get("type") == "text" and source.get("data"):
+                    parts.append({"type": "text", "text": str(source["data"])})
+        parts = images + parts
+        if parts:
+            messages.append({"role": "user", "content": _anthropic_user_content(parts)})
+    return messages
+
+
+def anthropic_tools(tools: Any) -> list[dict[str, Any]]:
+    result = []
+    for tool in tools if isinstance(tools, list) else []:
+        # Typed tools (web_search_..., text_editor_...) run on Anthropic's side.
+        if not isinstance(tool, dict) or not tool.get("name") or tool.get("type") not in (None, "custom"):
+            continue
+        schema = tool.get("input_schema")
+        result.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": str(tool["name"]),
+                    "description": str(tool.get("description") or ""),
+                    "parameters": schema if isinstance(schema, dict) else {"type": "object", "properties": {}},
+                },
+            }
+        )
+    return result
+
+
+def _anthropic_tool_choice(choice: Any) -> Any:
+    if not isinstance(choice, dict):
+        return None
+    kind = choice.get("type")
+    if kind == "tool" and choice.get("name"):
+        return {"type": "function", "function": {"name": str(choice["name"])}}
+    return {"auto": "auto", "any": "required", "none": "none"}.get(str(kind))
+
+
+def anthropic_to_chat_request(req: dict[str, Any]) -> dict[str, Any]:
+    # max_tokens is not passed on: Claude Code asks for more than most free models allow.
+    chat: dict[str, Any] = {"model": req.get("model"), "messages": anthropic_to_chat_messages(req)}
+    tools = anthropic_tools(req.get("tools"))
+    if tools:
+        chat["tools"] = tools
+        choice = _anthropic_tool_choice(req.get("tool_choice"))
+        if choice is not None:
+            chat["tool_choice"] = choice
+        if isinstance(req.get("tool_choice"), dict) and req["tool_choice"].get("disable_parallel_tool_use"):
+            chat["parallel_tool_calls"] = False
+    for key in ("temperature", "top_p"):
+        if isinstance(req.get(key), (int, float)) and not isinstance(req.get(key), bool):
+            chat[key] = req[key]
+    stops = req.get("stop_sequences")
+    if isinstance(stops, list) and stops:
+        chat["stop"] = [str(s) for s in stops][:4]
+    return chat
+
+
+def anthropic_wants_thinking(req: dict[str, Any]) -> bool:
+    thinking = req.get("thinking")
+    return isinstance(thinking, dict) and thinking.get("type") in ("enabled", "adaptive")
+
+
+def anthropic_estimate_tokens(req: dict[str, Any]) -> int:
+    # Rough count (about 4 characters per token); OpenCode has no counting endpoint.
+    text = json.dumps(
+        [req.get("system"), req.get("messages"), req.get("tools")], ensure_ascii=False, separators=(",", ":")
+    )
+    return max(1, len(text) // 4)
+
+
+def _anthropic_usage(usage: Any) -> dict[str, int]:
+    usage = _usage(usage)
+    cached = usage["prompt_tokens_details"]["cached_tokens"]
+    return {
+        "input_tokens": max(0, usage["prompt_tokens"] - cached),
+        "output_tokens": usage["completion_tokens"],
+        "cache_read_input_tokens": cached,
+        "cache_creation_input_tokens": 0,
+    }
+
+
+def _anthropic_tool_id(value: Any) -> str:
+    text = re.sub(r"[^A-Za-z0-9_-]", "_", str(value or ""))
+    return text or "toolu_" + secrets.token_hex(12)
+
+
+def anthropic_message(completion: dict[str, Any], *, thinking: bool) -> dict[str, Any]:
+    choice = completion["choices"][0]
+    message = choice["message"]
+    content: list[dict[str, Any]] = []
+    reasoning = message.get("reasoning_content") or message.get("reasoning")
+    if thinking and reasoning:
+        content.append({"type": "thinking", "thinking": str(reasoning), "signature": ANTHROPIC_THINKING_SIGNATURE})
+    if message.get("content"):
+        content.append({"type": "text", "text": str(message["content"])})
+    for call in message.get("tool_calls") or []:
+        function = call.get("function") or {}
+        content.append(
+            {
+                "type": "tool_use",
+                "id": _anthropic_tool_id(call.get("id")),
+                "name": str(function.get("name") or ""),
+                "input": _json_obj(function.get("arguments")),
+            }
+        )
+    reason = "tool_use" if message.get("tool_calls") else ANTHROPIC_STOP_REASONS.get(
+        str(choice.get("finish_reason") or "stop"), "end_turn"
+    )
+    return {
+        "id": "msg_" + secrets.token_hex(12),
+        "type": "message",
+        "role": "assistant",
+        "model": completion.get("model"),
+        "content": content,
+        "stop_reason": reason,
+        "stop_sequence": None,
+        "usage": _anthropic_usage(completion.get("usage")),
+    }
+
+
+class AnthropicStream:
+    """Turns Chat Completions deltas into Anthropic stream events.
+
+    Text and thinking stream as they arrive; tool calls are sent whole at the
+    end, because OpenAI-style deltas may interleave several calls.
+    """
+
+    def __init__(self, model: str, *, thinking: bool, input_tokens: int) -> None:
+        self.model = model
+        self.thinking = thinking
+        self.input_tokens = input_tokens
+        self.id = "msg_" + secrets.token_hex(12)
+        self.index = -1
+        self.open: str | None = None
+        self.calls: dict[int, dict[str, str]] = {}
+        self.finish_reason = "stop"
+        self.usage: Any = None
+
+    @staticmethod
+    def _event(kind: str, **fields: Any) -> tuple[str, dict[str, Any]]:
+        return kind, {"type": kind, **fields}
+
+    def start(self) -> list[tuple[str, dict[str, Any]]]:
+        message = {
+            "id": self.id,
+            "type": "message",
+            "role": "assistant",
+            "model": self.model,
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": self.input_tokens, "output_tokens": 0},
+        }
+        return [self._event("message_start", message=message), self._event("ping")]
+
+    def _close(self) -> list[tuple[str, dict[str, Any]]]:
+        if self.open is None:
+            return []
+        events = []
+        if self.open == "thinking":
+            events.append(self._event(
+                "content_block_delta", index=self.index,
+                delta={"type": "signature_delta", "signature": ANTHROPIC_THINKING_SIGNATURE},
+            ))
+        events.append(self._event("content_block_stop", index=self.index))
+        self.open = None
+        return events
+
+    def _open(self, kind: str, block: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+        events = self._close()
+        self.index += 1
+        self.open = kind
+        events.append(self._event("content_block_start", index=self.index, content_block=block))
+        return events
+
+    def _delta(self, kind: str, delta: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+        events: list[tuple[str, dict[str, Any]]] = []
+        if self.open != kind:
+            block = {"type": "thinking", "thinking": "", "signature": ""} if kind == "thinking" \
+                else {"type": "text", "text": ""}
+            events = self._open(kind, block)
+        events.append(self._event("content_block_delta", index=self.index, delta=delta))
+        return events
+
+    def feed(self, event: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+        if event.get("error"):
+            raise ProxyError(f"upstream inference error: {event['error']}")
+        self.model = str(event.get("model") or self.model)
+        if isinstance(event.get("usage"), dict):
+            self.usage = event["usage"]
+        events: list[tuple[str, dict[str, Any]]] = []
+        for choice in event.get("choices") or []:
+            if choice.get("finish_reason"):
+                self.finish_reason = str(choice["finish_reason"])
+            delta = choice.get("delta") or {}
+            thought = delta.get("reasoning_content") or delta.get("reasoning")
+            if self.thinking and thought:
+                events += self._delta("thinking", {"type": "thinking_delta", "thinking": str(thought)})
+            if delta.get("content"):
+                events += self._delta("text", {"type": "text_delta", "text": str(delta["content"])})
+            for raw_call in delta.get("tool_calls") or []:
+                index = int(raw_call.get("index", 0) or 0)
+                item = self.calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                if raw_call.get("id"):
+                    item["id"] = str(raw_call["id"])
+                function = raw_call.get("function") or {}
+                if function.get("name"):
+                    item["name"] = str(function["name"])
+                item["arguments"] += str(function.get("arguments") or "")
+        return events
+
+    def finish(self) -> list[tuple[str, dict[str, Any]]]:
+        if self.finish_reason == "content_filter" and not self.calls and self.open is None:
+            raise ProxyError("upstream blocked the response by content filter.", 400)
+        events = self._close()
+        calls = [self.calls[i] for i in sorted(self.calls) if self.calls[i]["name"]]
+        for call in calls:
+            events += self._open("tool_use", {
+                "type": "tool_use", "id": _anthropic_tool_id(call["id"]), "name": call["name"], "input": {},
+            })
+            partial = json.dumps(_json_obj(call["arguments"]), ensure_ascii=False)
+            events.append(self._event(
+                "content_block_delta", index=self.index, delta={"type": "input_json_delta", "partial_json": partial},
+            ))
+            events += self._close()
+        reason = "tool_use" if calls else ANTHROPIC_STOP_REASONS.get(self.finish_reason, "end_turn")
+        usage = _anthropic_usage(self.usage) if self.usage is not None else {
+            "input_tokens": self.input_tokens, "output_tokens": 0,
+        }
+        events.append(self._event("message_delta", delta={"stop_reason": reason, "stop_sequence": None}, usage=usage))
+        events.append(self._event("message_stop"))
+        return events
+
+    @staticmethod
+    def fail(message: str, status: int = 502) -> list[tuple[str, dict[str, Any]]]:
+        kind = ANTHROPIC_ERROR_TYPES.get(status, "api_error")
+        return [("error", {"type": "error", "error": {"type": kind, "message": message}})]
+
+
 _TEST_PROMPT = "Reply with exactly the token: OK-DASH"
 
 
@@ -2102,7 +2473,7 @@ def dashboard_state(*, local: bool) -> dict[str, Any]:
         "model_list": model_source(),
         "lan_ip": _lan_ip() if BOUND_OPEN else None,
         "port": BOUND_PORT,
-        "default_model": DEFAULT_MODEL if DEFAULT_MODEL in models else (models[0] if models else DEFAULT_MODEL),
+        "default_model": route_default_model(models),
     }
 
 
@@ -2130,9 +2501,14 @@ def regenerate_api_key() -> str:
 KEY_PATTERN = re.compile(r"^[A-Za-z0-9._~+/=-]{8,200}$")
 
 
+def route_default_model(models: list[str] | None = None) -> str:
+    models = available_models() if models is None else models
+    return DEFAULT_MODEL if DEFAULT_MODEL in models else (models[0] if models else DEFAULT_MODEL)
+
+
 def integration_target() -> integrations.Target:
     models = available_models()
-    default = DEFAULT_MODEL if DEFAULT_MODEL in models else (models[0] if models else DEFAULT_MODEL)
+    default = route_default_model(models)
     return integrations.Target(
         base_url=f"http://127.0.0.1:{BOUND_PORT}/v1",
         api_key=OpenAICompatibleHandler.api_key,
@@ -2395,6 +2771,8 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/responses"): ("client", "_post_responses"),
     ("POST", "/api/chat"): ("client", "_post_ollama_chat"),
     ("POST", "/api/generate"): ("client", "_post_ollama_generate"),
+    ("POST", "/v1/messages"): ("client", "_post_anthropic_messages"),
+    ("POST", "/v1/messages/count_tokens"): ("client", "_post_anthropic_count_tokens"),
     ("GET", "/api/dashboard"): ("dashboard", "_get_dashboard_state"),
     ("GET", "/api/dashboard/stats"): ("dashboard", "_get_dashboard_stats"),
     ("GET", "/api/dashboard/log"): ("dashboard", "_get_dashboard_log"),
@@ -2417,10 +2795,11 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
 INFERENCE_PATHS = frozenset(
     {
         "/v1/chat/completions", "/chat/completions", "/v1/responses", "/responses",
-        "/api/chat", "/api/generate", "/api/dashboard/test",
+        "/api/chat", "/api/generate", "/api/dashboard/test", "/v1/messages",
     }
 )
 OLLAMA_PATHS = frozenset({"/api/chat", "/api/generate", "/api/show"})
+ANTHROPIC_PATHS = frozenset({"/v1/messages", "/v1/messages/count_tokens"})
 QUIET_PATHS = frozenset(
     {"/", "/dashboard", "/favicon.ico", "/health", "/api/dashboard", "/api/dashboard/stats",
      "/api/dashboard/log", "/api/dashboard/settings", "/api/dashboard/integrations",
@@ -2486,6 +2865,8 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         try:
             if self._path in OLLAMA_PATHS:
                 self._send_json(code, {"error": message})
+            elif self._path in ANTHROPIC_PATHS:
+                self._send_json(code, AnthropicStream.fail(message, code)[0][1])
             else:
                 self._send_json(
                     code, {"error": {"message": message, "type": "route_error", "code": code}}
@@ -2770,14 +3151,19 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"ok": True, "version": APP_VERSION})
 
     def _get_models(self) -> None:
+        models = available_models()
         self._send_json(
             200,
             {
                 "object": "list",
                 "data": [
-                    {"id": model, "object": "model", "created": 0, "owned_by": "opencode"}
-                    for model in available_models()
+                    {"id": model, "object": "model", "created": 0, "owned_by": "opencode",
+                     "type": "model", "display_name": model, "created_at": "1970-01-01T00:00:00Z"}
+                    for model in models
                 ],
+                "has_more": False,
+                "first_id": models[0] if models else None,
+                "last_id": models[-1] if models else None,
             },
         )
 
@@ -3112,6 +3498,69 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
             self._meta["error"] = str(exc)
             try:
                 send(builder.fail(str(exc)))
+            except OSError:
+                pass
+        self._end_chunked()
+
+
+    def _resolve_anthropic_model(self, name: Any) -> str:
+        text = re.sub(r"\[[^\]]*\]$", "", str(name or "").strip())  # "[1m]" context suffix
+        bare = text.split("/", 1)[1] if text.startswith("opencode/") else text
+        models = available_models()
+        lowered = bare.lower()
+        if models and bare not in models and (
+            not bare or lowered.startswith("claude") or lowered in CLAUDE_MODEL_ALIASES
+        ):
+            # Claude Code asks for Claude models unless every model setting points here.
+            text = route_default_model(models)
+        return self._resolve_model(text)
+
+    def _post_anthropic_messages(self) -> None:
+        req = self._read_json()
+        validate_messages(req.get("messages"))
+        model = self._resolve_anthropic_model(req.get("model"))
+        thinking = anthropic_wants_thinking(req)
+        estimate = anthropic_estimate_tokens(req)
+        deltas = self._open_upstream(anthropic_to_chat_request(req), model)
+        if bool(req.get("stream")):
+            self._anthropic_stream(deltas, model, thinking, estimate)
+        else:
+            self._send_json(200, anthropic_message(merge_deltas(deltas, model), thinking=thinking))
+
+    def _post_anthropic_count_tokens(self) -> None:
+        req = self._read_json()
+        validate_messages(req.get("messages"))
+        self._send_json(200, {"input_tokens": anthropic_estimate_tokens(req)})
+
+    def _anthropic_stream(
+        self, deltas: Iterator[dict[str, Any]], model: str, thinking: bool, estimate: int
+    ) -> None:
+        builder = AnthropicStream(model, thinking=thinking, input_tokens=estimate)
+        self._start_chunked("text/event-stream; charset=utf-8")
+
+        def send(events: list[tuple[str, dict[str, Any]]]) -> None:
+            for name, payload in events:
+                data = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+                self._chunk(f"event: {name}\ndata: ".encode() + data + b"\n\n")
+
+        try:
+            send(builder.start())
+            seen = False
+            for event in deltas:
+                seen = True
+                send(builder.feed(event))
+            if not seen:
+                raise ProxyError("upstream returned no events.")
+            send(builder.finish())
+        except CLIENT_GONE:
+            self._meta["error"] = "client disconnected"
+            self.close_connection = True
+            return
+        except Exception as exc:
+            code = exc.status_code if isinstance(exc, ProxyError) else 502
+            self._meta["error"] = str(exc)
+            try:
+                send(AnthropicStream.fail(str(exc), code))
             except OSError:
                 pass
         self._end_chunked()

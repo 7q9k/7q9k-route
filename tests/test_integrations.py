@@ -68,7 +68,7 @@ class Base(unittest.TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
-        for var in ("HERMES_HOME", "XDG_CONFIG_HOME"):
+        for var in ("HERMES_HOME", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR"):
             integrations.os.environ.pop(var, None)
 
 

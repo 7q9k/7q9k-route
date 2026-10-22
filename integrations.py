@@ -381,110 +381,94 @@ class Hermes(Integration):
         _write_text(path, "\n".join(lines) + "\n", newline, bom, backup_dir)
 
 
-class SevenQ9kAgent(Integration):
-    id = "7q9k-agent"
-    name = "7q9k-Agent"
-    restart_hint = "In 7q9k, choose a model with /model under the 7q9k route category."
+class ClaudeCode(Integration):
+    id = "claude-code"
+    name = "Claude Code"
+    restart_hint = "Start a new Claude Code session. Switch models with /model <name>, e.g. /model big-pickle."
+    # Marks the env entries as ours, so another local proxy set up by hand is never touched.
+    marker = "ROUTE7Q9K_PROVIDER"
+    model_keys = (
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "CLAUDE_CODE_SUBAGENT_MODEL",
+    )
 
     def home(self) -> Path:
-        if os.environ.get("CODEX_HOME"):
-            return Path(os.environ["CODEX_HOME"])
-        return _home() / ".7q9k"
+        if os.environ.get("CLAUDE_CONFIG_DIR"):
+            return Path(os.environ["CLAUDE_CONFIG_DIR"])
+        return _home() / ".claude"
 
     def config_paths(self) -> list[Path]:
-        return [self.home() / "config.toml"]
+        return [self.home() / "settings.json"]
 
     def app_present(self) -> bool:
-        programs = Path(os.environ.get("LOCALAPPDATA") or _home() / "AppData" / "Local") / "Programs"
+        npm = Path(os.environ.get("APPDATA") or _home() / "AppData" / "Roaming") / "npm"
         return (
             self.home().exists()
-            or (_home() / "bin" / "7q9k-agent.exe").exists()
-            or (programs / "7q9k-Agent" / "7q9k-agent.exe").exists()
+            or (_home() / ".claude.json").exists()
+            or (_home() / ".local" / "bin" / "claude.exe").exists()
+            or (_home() / ".local" / "bin" / "claude").exists()
+            or (npm / "claude.cmd").exists()
         )
 
-    @staticmethod
-    def _drop_selection(lines: list[str]) -> None:
-        """Remove a top-level `model_provider = "7q9k-route"` and its `model`.
+    def env(self, target: Target) -> dict[str, str]:
+        # Claude Code appends /v1/messages itself.
+        base = target.base_url[:-3] if target.base_url.endswith("/v1") else target.base_url
+        values = {"ANTHROPIC_BASE_URL": base, "ANTHROPIC_AUTH_TOKEN": target.api_key}
+        values.update({key: target.default_model for key in self.model_keys})
+        values[self.marker] = PROVIDER_ID
+        return values
 
-        Without this the agent would keep selecting a provider whose block is gone.
-        """
-        top_end = next((i for i, l in enumerate(lines) if l.lstrip().startswith("[")), len(lines))
-        selects_us = re.compile(r"""^\s*model_provider\s*=\s*["']%s["']\s*(#.*)?$""" % re.escape(PROVIDER_ID))
-        if not any(selects_us.match(l) for l in lines[:top_end]):
-            return
-        model_line = re.compile(r"^\s*model\s*=")
-        lines[:top_end] = [
-            l for l in lines[:top_end] if not selects_us.match(l) and not model_line.match(l)
-        ]
-
-    @staticmethod
-    def header() -> str:
-        return f"[model_providers.{PROVIDER_ID}]"
-
-    def block(self, target: Target) -> list[str]:
-        # json.dumps yields valid TOML basic strings for these values.
-        return [
-            self.header(),
-            f"name = {json.dumps(DISPLAY_NAME)}",
-            f"base_url = {json.dumps(target.base_url)}",
-            'wire_api = "chat"',
-            f"experimental_bearer_token = {json.dumps(target.api_key)}",
-        ]
-
-    def _span(self, lines: list[str]) -> tuple[int, int] | None:
-        start = next((i for i, l in enumerate(lines) if l.strip() == self.header()), None)
-        if start is None:
-            return None
-        end = start + 1
-        while end < len(lines) and not lines[end].lstrip().startswith("["):
-            end += 1
-        while end > start + 1 and not lines[end - 1].strip():
-            end -= 1
-        return start, end
+    def _load(self, path: Path) -> tuple[dict[str, Any], str, bool]:
+        if not path.exists():
+            return {}, os.linesep if os.name == "nt" else "\n", False
+        text, newline, bom = _read_text(path)
+        if not text.strip():
+            return {}, newline, bom
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            raise IntegrationError(f"settings.json is not valid JSON ({exc}); fix it first") from exc
+        if not isinstance(data, dict):
+            raise IntegrationError("settings.json does not hold a JSON object")
+        env = data.get("env")
+        if env is not None and not isinstance(env, dict):
+            raise IntegrationError('"env" in settings.json is not an object')
+        return data, newline, bom
 
     def status(self, target: Target) -> str:
-        path = self.config_paths()[0]
-        if not path.exists():
+        data, _, _ = self._load(self.config_paths()[0])
+        env = data.get("env") or {}
+        if env.get(self.marker) != PROVIDER_ID:
             return "not_connected"
-        lines = _read_text(path)[0].split("\n")
-        span = self._span(lines)
-        if span is None:
-            return "not_connected"
-        current = [l.strip() for l in lines[span[0]:span[1]] if l.strip()]
-        return "connected" if current == self.block(target) else "outdated"
+        wanted = self.env(target)
+        return "connected" if all(env.get(k) == v for k, v in wanted.items()) else "outdated"
 
     def connect(self, target: Target, backup_dir: Path) -> None:
-        self._apply(self.block(target), backup_dir)
+        path = self.config_paths()[0]
+        data, newline, bom = self._load(path)
+        env = data.setdefault("env", {})
+        env.update(self.env(target))
+        _write_text(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n", newline, bom, backup_dir)
 
     def disconnect(self, backup_dir: Path) -> None:
-        if self.config_paths()[0].exists():
-            self._apply(None, backup_dir)
-
-    def _apply(self, block: list[str] | None, backup_dir: Path) -> None:
         path = self.config_paths()[0]
-        if path.exists():
-            text, newline, bom = _read_text(path)
-        else:
-            text, newline, bom = "", os.linesep if os.name == "nt" else "\n", False
-        lines = text.split("\n")
-        if lines and lines[-1] == "":
-            lines.pop()
-        span = self._span(lines)
-        if block is None:
-            if span is None:
-                return
-            del lines[span[0]:span[1]]
-            self._drop_selection(lines)
-        elif span is not None:
-            lines[span[0]:span[1]] = block
-        else:
-            if lines and lines[-1].strip():
-                lines.append("")
-            lines += block
-        _write_text(path, "\n".join(lines) + "\n", newline, bom, backup_dir)
+        if not path.exists():
+            return
+        data, newline, bom = self._load(path)
+        env = data.get("env") or {}
+        if env.get(self.marker) != PROVIDER_ID:
+            return
+        for key in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", *self.model_keys, self.marker):
+            env.pop(key, None)
+        if not env:
+            data.pop("env", None)
+        _write_text(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n", newline, bom, backup_dir)
 
 
-REGISTRY: list[Integration] = [SevenQ9kAgent(), DeepSeekHarness(), Hermes()]
+REGISTRY: list[Integration] = [ClaudeCode(), DeepSeekHarness(), Hermes()]
 
 
 def get(integration_id: str) -> Integration:
