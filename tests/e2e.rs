@@ -284,6 +284,12 @@ fn end_to_end() {
     let (status, _) = post(port, "/api/dashboard/save", json!({}));
     assert_eq!(status, 200);
     assert!(route.data_dir.join("stats.json").is_file());
+    let (status, text) = post(port, "/api/dashboard/clear-errors", json!({}));
+    assert_eq!(status, 200, "{text}");
+    let (_, stats) = get(port, "/api/dashboard/stats");
+    assert_eq!(stats["errors"], 0, "{stats}");
+    assert!(stats["requests"].as_i64().unwrap() >= 10, "{stats}");
+    assert!(stats["log"].as_array().unwrap().iter().all(|e| e["status"].as_i64().unwrap_or(0) < 400), "{stats}");
     let (status, text) = post(port, "/api/dashboard/key", json!({"key": "bad key"}));
     assert_eq!(status, 400, "{text}");
     let (status, text) = post(port, "/api/dashboard/settings", json!({"port": 80}));

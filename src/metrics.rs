@@ -379,6 +379,23 @@ impl Metrics {
         self.dirty.store(true, Ordering::Relaxed);
     }
 
+    /// Forgets all errors (counts, failed log entries, limit hits) but keeps the rest.
+    pub fn clear_errors(&self) {
+        let mut guard = self.lock();
+        let c = &mut *guard;
+        c.errors = 0;
+        for (_, stats) in c.models.iter_mut() {
+            stats.errors = 0.0;
+        }
+        for bucket in c.minutes.values_mut().chain(c.hours.values_mut()) {
+            bucket[1] = 0;
+        }
+        c.limit_hits.clear();
+        c.log.retain(|e| !(e.g("status").int() >= 400 || e.g("error").truthy()));
+        drop(guard);
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
     pub fn autosave_loop(&self, interval: f64) {
         loop {
             std::thread::sleep(Duration::from_secs_f64(interval));
@@ -388,8 +405,6 @@ impl Metrics {
         }
     }
 }
-
-#[allow(dead_code)]
 
 #[cfg(test)]
 mod tests {
@@ -419,5 +434,22 @@ mod tests {
         assert_eq!(snap["models"]["m"]["avg_ms"], 65);
         assert_eq!(snap["limits"]["requests_24h"], 2);
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn clears_errors_only() {
+        let metrics = Metrics::new(None);
+        metrics.record(json!({"status": 200, "model": "m", "ms": 10.0, "tokens_in": 5, "tokens_out": 3}), true);
+        metrics.record(json!({"status": 429, "model": "m", "ms": 10.0, "error": "FreeUsageLimit"}), true);
+        metrics.record(json!({"status": 200, "model": "m", "ms": 10.0, "error": "stream broke"}), true);
+        metrics.clear_errors();
+        let snap = metrics.snapshot();
+        assert_eq!(snap["requests"], 3);
+        assert_eq!(snap["errors"], 0);
+        assert_eq!(snap["models"]["m"]["errors"], 0);
+        assert_eq!(snap["models"]["m"]["tokens"], 8);
+        assert_eq!(snap["limits"]["limit_hits_24h"], 0);
+        assert_eq!(snap["log"].items().len(), 1);
+        assert!(snap["timeline"].items().iter().all(|b| b["errors"] == 0));
     }
 }

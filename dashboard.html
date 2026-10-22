@@ -481,10 +481,13 @@
       <section class="section">
         <div class="section-head">
           <h2>Requests</h2>
-          <div class="mode" role="radiogroup" aria-label="Filter" id="logFilter">
-            <button role="radio" data-f="all" aria-checked="true">All</button>
-            <button role="radio" data-f="err" aria-checked="false">Errors</button>
-          </div>
+          <span class="tools">
+            <button class="text-btn" id="btnClearErrors" hidden>Clear errors</button>
+            <div class="mode" role="radiogroup" aria-label="Filter" id="logFilter">
+              <button role="radio" data-f="all" aria-checked="true">All</button>
+              <button role="radio" data-f="err" aria-checked="false">Errors</button>
+            </div>
+          </span>
         </div>
         <ul class="list log" id="log"></ul>
       </section>
@@ -748,6 +751,7 @@ function renderSave(){
   const s=stats; if(!s) return;
   $('btnSave').hidden = !s.persistent;
   $('btnReset').hidden = !state?.local;
+  $('btnClearErrors').hidden = !state?.local || !(s.errors || s.limits?.limit_hits_24h || (s.log||[]).some(e=>e.status>=400 || e.error));
   $('saveState').textContent = !s.persistent ? 'Saving is off' : (s.saved_at ? `Saved ${fmtClock(s.saved_at)}` : 'Not saved yet');
 }
 
@@ -933,6 +937,7 @@ $('btnRefresh').onclick=e=>busy(e.currentTarget, async()=>{ const r=await api('/
 $('btnTestAll').onclick=e=>busy(e.currentTarget, async()=>{ for (const li of $('models').children) await testModel(li); });
 $('btnSave').onclick=e=>busy(e.currentTarget, async()=>{ const r=await api('/api/dashboard/save',{}); toast(`Saved to ${r.file.split(/[\\/]/).pop()}`); refreshStats(); });
 armed($('btnReset'), 'Really delete all?', async()=>{ await api('/api/dashboard/reset',{}); toast('Stats reset'); refreshStats(); });
+armed($('btnClearErrors'), 'Really clear errors?', async()=>{ await api('/api/dashboard/clear-errors',{}); toast('Errors cleared'); refreshStats(); });
 armed($('btnKey'), 'Really replace it?', async()=>{ await api('/api/dashboard/key',{}); await loadState(); toast('New key active. Connected apps are updated.'); });
 armed($('btnStop'), 'Really stop?', async()=>{
   await api('/api/dashboard/stop',{});

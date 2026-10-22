@@ -228,6 +228,7 @@ const ROUTES: &[(&str, &str, Access, Handler)] = &[
     ("POST", "/api/dashboard/settings", Access::Admin, Conn::post_settings),
     ("POST", "/api/dashboard/restart", Access::Admin, Conn::post_restart),
     ("POST", "/api/dashboard/reset", Access::Admin, Conn::post_reset_stats),
+    ("POST", "/api/dashboard/clear-errors", Access::Admin, Conn::post_clear_errors),
     ("POST", "/api/dashboard/key", Access::Admin, Conn::post_new_key),
     ("POST", "/api/dashboard/stop", Access::Admin, Conn::post_stop_server),
     ("POST", "/api/dashboard/open-folder", Access::Admin, Conn::post_open_folder),
@@ -413,7 +414,7 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> Result<Request, ReadErr> {
     if !valid {
         return Err(ReadErr::Bad(400, format!("Bad request version ({version:?})")));
     }
-    if version.as_str() >= "HTTP/2.0" {
+    if http_version(&version) >= (2, 0) {
         return Err(ReadErr::Bad(505, format!("Invalid HTTP version ({numbers})")));
     }
     let mut headers = Vec::new();
@@ -445,6 +446,12 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> Result<Request, ReadErr> {
     Ok(Request { method: words[0].to_string(), target: words[1].to_string(), version, headers })
 }
 
+/// `(major, minor)` of an already validated `HTTP/x.y`.
+fn http_version(version: &str) -> (u32, u32) {
+    let (a, b) = version[5..].split_once('.').unwrap_or(("0", "0"));
+    (a.parse().unwrap_or(u32::MAX), b.parse().unwrap_or(u32::MAX))
+}
+
 /// `urllib.parse.urlsplit(target).path`.
 fn url_path(target: &str) -> String {
     let mut rest = target;
@@ -466,12 +473,11 @@ fn percent_decode(text: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() + 0 && i + 2 <= bytes.len() - 1 {
-            if let Ok(b) = u8::from_str_radix(&text[i + 1..i + 3], 16) {
-                out.push(b);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%' && i + 2 < bytes.len() && bytes[i + 1].is_ascii_hexdigit() && bytes[i + 2].is_ascii_hexdigit() {
+            let hex = |c: u8| (c as char).to_digit(16).unwrap_or(0) as u8;
+            out.push(hex(bytes[i + 1]) << 4 | hex(bytes[i + 2]));
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;
@@ -587,12 +593,15 @@ fn handle_connection(stream: TcpStream) {
             if connection == "close" {
                 true
             } else {
-                !(connection == "keep-alive" || req.version.as_str() >= "HTTP/1.1")
+                !(connection == "keep-alive" || http_version(&req.version) >= (1, 1))
             }
         };
         let mut conn = Conn {
             reader,
-            out: out.try_clone().unwrap_or_else(|_| out.try_clone().expect("socket")),
+            out: match out.try_clone() {
+                Ok(out) => out,
+                Err(_) => return,
+            },
             peer,
             path: url_path(&req.target),
             req,
@@ -604,7 +613,7 @@ fn handle_connection(stream: TcpStream) {
             body_read: false,
             close,
         };
-        if conn.req.version.as_str() >= "HTTP/1.1" && conn.req.header_or("Expect").eq_ignore_ascii_case("100-continue") {
+        if http_version(&conn.req.version) >= (1, 1) && conn.req.header_or("Expect").eq_ignore_ascii_case("100-continue") {
             if conn.out.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").is_err() {
                 return;
             }
@@ -1222,8 +1231,17 @@ impl Conn {
     }
 
     fn post_reset_stats(&mut self) -> HResult {
+        metrics().reset();
+        self.save_stats()
+    }
+
+    fn post_clear_errors(&mut self) -> HResult {
+        metrics().clear_errors();
+        self.save_stats()
+    }
+
+    fn save_stats(&mut self) -> HResult {
         let metrics = metrics();
-        metrics.reset();
         if let Some(path) = &metrics.path {
             metrics.save().map_err(|e| ProxyError::new(format!("could not write {}: {e}", file_name(path)), 500))?;
         }
@@ -1895,5 +1913,12 @@ mod tests {
         assert_eq!(host_name("[::1]:8787"), "::1");
         assert_eq!(percent_decode("fonts%2Fgeist.woff2"), "fonts/geist.woff2");
         assert_eq!(percent_decode("a%2"), "a%2");
+        assert_eq!(percent_decode("a%2F"), "a/");
+        assert_eq!(percent_decode("%\u{e9}x"), "%\u{e9}x");
+        assert_eq!(percent_decode("%zz"), "%zz");
+        assert_eq!(http_version("HTTP/1.1"), (1, 1));
+        assert!(http_version("HTTP/10.0") >= (2, 0));
+        assert!(http_version("HTTP/1.10") >= (1, 1));
+        assert!(http_version("HTTP/0.9") < (1, 1));
     }
 }
