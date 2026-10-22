@@ -19,6 +19,12 @@ BACKUPS_KEPT = 10
 _LOCK = threading.Lock()
 
 
+# Claude Code lists gateway models only when the id names claude or anthropic, so /v1/models
+# prefixes ids for Anthropic clients and the server strips the prefix again.
+ANTHROPIC_MODEL_PREFIX = "anthropic-route-"
+MODEL_DESCRIPTION = "Free via 7q9k route"
+
+
 @dataclass
 class Target:
     base_url: str
@@ -387,13 +393,12 @@ class ClaudeCode(Integration):
     restart_hint = "Start a new Claude Code session; /model lists every free model."
     # Marks the env entries as ours, so another local proxy set up by hand is never touched.
     marker = "ROUTE7Q9K_PROVIDER"
-    model_keys = (
-        "ANTHROPIC_MODEL",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-        "ANTHROPIC_DEFAULT_FABLE_MODEL",
-        "CLAUDE_CODE_SUBAGENT_MODEL",
+    model_keys = ("ANTHROPIC_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL")
+    # /model shows one entry per family slot. Each slot gets a different model, under the same
+    # id the model list uses, so Claude Code drops it from the list instead of showing it twice.
+    families = ("OPUS", "SONNET", "HAIKU", "FABLE")
+    family_keys = tuple(
+        f"ANTHROPIC_DEFAULT_{family}_MODEL{suffix}" for family in families for suffix in ("", "_NAME", "_DESCRIPTION")
     )
     fixed = {
         # /model lists every model from GET /v1/models.
@@ -425,6 +430,12 @@ class ClaudeCode(Integration):
         base = target.base_url[:-3] if target.base_url.endswith("/v1") else target.base_url
         values = {"ANTHROPIC_BASE_URL": base, "ANTHROPIC_AUTH_TOKEN": target.api_key}
         values.update({key: target.default_model for key in self.model_keys})
+        models = list(dict.fromkeys([target.default_model, *target.models]))
+        for i, family in enumerate(self.families):
+            model = models[i % len(models)]
+            values[f"ANTHROPIC_DEFAULT_{family}_MODEL"] = ANTHROPIC_MODEL_PREFIX + model
+            values[f"ANTHROPIC_DEFAULT_{family}_MODEL_NAME"] = model
+            values[f"ANTHROPIC_DEFAULT_{family}_MODEL_DESCRIPTION"] = MODEL_DESCRIPTION
         values.update(self.fixed)
         values[self.marker] = PROVIDER_ID
         return values
@@ -469,7 +480,7 @@ class ClaudeCode(Integration):
         env = data.get("env") or {}
         if env.get(self.marker) != PROVIDER_ID:
             return
-        for key in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", *self.model_keys, *self.fixed, self.marker):
+        for key in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", *self.model_keys, *self.family_keys, *self.fixed, self.marker):
             env.pop(key, None)
         if not env:
             data.pop("env", None)

@@ -29,7 +29,7 @@ from typing import Any, Iterator
 
 import integrations
 
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -1414,8 +1414,7 @@ ANTHROPIC_ERROR_TYPES = {
 ANTHROPIC_THINKING_SIGNATURE = "7q9k-route"
 # Model names Claude Code uses on its own (aliases, background tasks).
 CLAUDE_MODEL_ALIASES = frozenset({"opus", "sonnet", "haiku", "default", "best", "opusplan"})
-# Claude Code's /model only lists gateway models whose id names Claude or Anthropic.
-ANTHROPIC_MODEL_PREFIX = "anthropic-route-"
+ANTHROPIC_MODEL_PREFIX = integrations.ANTHROPIC_MODEL_PREFIX
 
 
 def _anthropic_blocks(content: Any) -> list[dict[str, Any]]:
@@ -3162,7 +3161,7 @@ class OpenAICompatibleHandler(BaseHTTPRequestHandler):
                 "data": [
                     {"id": prefix + model, "object": "model", "created": 0, "owned_by": "opencode",
                      "type": "model", "display_name": model, "created_at": "1970-01-01T00:00:00Z",
-                     "description": "Free via 7q9k route"}
+                     "description": integrations.MODEL_DESCRIPTION}
                     for model in models
                 ],
                 "has_more": False,

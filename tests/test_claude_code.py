@@ -56,6 +56,16 @@ class ClaudeCodeAppTests(Base):
         self.assertEqual(json.loads(self.path.read_bytes()), original)
         self.assertEqual(self.app.status(target()), "not_connected")
 
+    def test_family_slots_get_different_listed_models(self):
+        self.path.parent.mkdir()
+        self.app.connect(target(models=("a-free", "b-free", "c-free", "d-free", "e-free")), self.backups)
+        env = json.loads(self.path.read_text(encoding="utf-8"))["env"]
+        slots = [env[f"ANTHROPIC_DEFAULT_{f}_MODEL"] for f in ("OPUS", "SONNET", "HAIKU", "FABLE")]
+        self.assertEqual(slots, ["anthropic-route-a-free", "anthropic-route-b-free", "anthropic-route-c-free",
+                                 "anthropic-route-d-free"])
+        self.assertEqual(env["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"], "b-free")
+        self.assertEqual(env["ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION"], "Free via 7q9k route")
+
     def test_creates_settings_and_removes_empty_env(self):
         self.path.parent.mkdir()
         self.app.connect(target(), self.backups)

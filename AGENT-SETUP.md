@@ -42,10 +42,12 @@ One click: dashboard -> Apps -> Claude Code -> Connect. Or add to `~/.claude/set
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
     "ANTHROPIC_AUTH_TOKEN": "<key>",
     "ANTHROPIC_MODEL": "big-pickle",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "big-pickle",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "big-pickle",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "big-pickle",
-    "ANTHROPIC_DEFAULT_FABLE_MODEL": "big-pickle",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic-route-big-pickle",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "big-pickle",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic-route-beam-free",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": "beam-free",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic-route-deepseek-v4.1-flash-free",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": "deepseek-v4.1-flash-free",
     "CLAUDE_CODE_SUBAGENT_MODEL": "big-pickle",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
     "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"
@@ -53,7 +55,7 @@ One click: dashboard -> Apps -> Claude Code -> Connect. Or add to `~/.claude/set
 }
 ```
 
-The base URL has no `/v1`; Claude Code adds `/v1/messages` itself. Then start `claude`; `/model` lists every free model (as `anthropic-route-<model>`).
+The base URL has no `/v1`; Claude Code adds `/v1/messages` itself. Then start `claude`; `/model` lists every free model (as `anthropic-route-<model>`). Each opus/sonnet/haiku/fable slot should name a different model, otherwise the menu shows it twice.
 
 **Python**: see `examples/openai_agent.py` for a small tool-calling agent.
 
