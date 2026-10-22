@@ -405,6 +405,9 @@ class ClaudeCode(Integration):
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         # Otherwise Claude Code adds "[1m]" to the default model.
         "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
+        # claude.ai connectors need the claude.ai login, which the route replaces; without this
+        # Claude Code warns about it at every start.
+        "ENABLE_CLAUDEAI_MCP_SERVERS": "0",
     }
 
     def home(self) -> Path:

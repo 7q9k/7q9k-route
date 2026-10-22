@@ -29,7 +29,7 @@ from typing import Any, Iterator
 
 import integrations
 
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent

@@ -50,7 +50,8 @@ One click: dashboard -> Apps -> Claude Code -> Connect. Or add to `~/.claude/set
     "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": "deepseek-v4.1-flash-free",
     "CLAUDE_CODE_SUBAGENT_MODEL": "big-pickle",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
+    "ENABLE_CLAUDEAI_MCP_SERVERS": "0"
   }
 }
 ```
