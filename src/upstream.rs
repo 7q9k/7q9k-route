@@ -16,9 +16,9 @@ pub const DIRECT_URL: &str = "https://opencode.ai/inference/v1/chat/completions"
 pub const RESPONSES_URL: &str = "https://opencode.ai/inference/v1/responses";
 pub const ZEN_MODELS_URL: &str = "https://opencode.ai/zen/v1/models";
 pub const MODELS_DEV_URL: &str = "https://models.dev/api.json";
-pub const OPENCODE_VERSION: &str = "1.19.0";
-pub const UA_CHAT: &str = "opencode/1.19.0 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14";
-pub const UA_RESPONSES: &str = "opencode/1.19.0 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14";
+pub const OPENCODE_VERSION: &str = "2.2.1";
+pub const UA_CHAT: &str = "opencode/2.2.1 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14";
+pub const UA_RESPONSES: &str = "opencode/2.2.1 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14";
 pub const CLIENT_HEADER: &str = "cli";
 pub const PROJECT_HEADER: &str = "global";
 

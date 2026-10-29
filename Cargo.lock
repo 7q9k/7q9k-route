@@ -544,7 +544,7 @@ dependencies = [
 
 [[package]]
 name = "route7q9k"
-version = "2.0.1"
+version = "2.2.1"
 dependencies = [
  "chrono",
  "ctrlc",
